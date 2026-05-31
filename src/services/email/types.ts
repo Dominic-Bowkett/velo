@@ -91,6 +91,20 @@ export interface EmailProvider {
   ): Promise<{ draftId: string }>;
   deleteDraft(draftId: string): Promise<void>;
 
+  /**
+   * Append a raw RFC822 message into a folder/mailbox of THIS account.
+   * Used for cross-account move/assign: the raw source is fetched from one
+   * account (fetchRawMessage) and appended into another account's folder.
+   * @param folderPath destination folder path (IMAP) or label ID (Gmail)
+   * @param rawBase64Url base64url-encoded RFC822 message
+   * @param flags optional IMAP flags string (e.g. "(\\Seen)")
+   */
+  appendRawMessage(
+    folderPath: string,
+    rawBase64Url: string,
+    flags?: string,
+  ): Promise<{ id?: string }>;
+
   // Connection
   testConnection(): Promise<{ success: boolean; message: string }>;
   getProfile(): Promise<{ email: string; name?: string }>;

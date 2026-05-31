@@ -244,6 +244,29 @@ export class GmailApiProvider implements EmailProvider {
     await this.client.deleteDraft(draftId);
   }
 
+  async appendRawMessage(
+    folderPath: string,
+    rawBase64Url: string,
+    flags?: string,
+  ): Promise<{ id?: string }> {
+    // Gmail has no folders; `folderPath` is a destination label ID.
+    // messages.import places the message in the mailbox (and runs filters),
+    // preserving the original headers/date carried in the raw MIME.
+    const seen = flags?.includes("\\Seen") ?? false;
+    const labelIds = ["INBOX", ...(seen ? [] : ["UNREAD"])];
+    if (folderPath && folderPath !== "INBOX" && !labelIds.includes(folderPath)) {
+      labelIds.push(folderPath);
+    }
+    const resp = await this.client.request<{ id: string }>(
+      "/messages/import?internalDateSource=dateHeader&neverMarkSpam=true",
+      {
+        method: "POST",
+        body: JSON.stringify({ raw: rawBase64Url, labelIds }),
+      },
+    );
+    return { id: resp.id };
+  }
+
   async testConnection(): Promise<{ success: boolean; message: string }> {
     try {
       const profile = await this.client.getProfile();

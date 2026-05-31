@@ -557,6 +557,17 @@ export class ImapSmtpProvider implements EmailProvider {
     }
   }
 
+  async appendRawMessage(
+    folderPath: string,
+    rawBase64Url: string,
+    flags?: string,
+  ): Promise<{ id?: string }> {
+    const config = await this.getImapConfig();
+    await imapAppendMessage(config, folderPath, rawBase64Url, flags);
+    // IMAP APPEND does not return the new UID; the message surfaces on next sync.
+    return {};
+  }
+
   // ---- Connection ----
 
   async testConnection(): Promise<{ success: boolean; message: string }> {
