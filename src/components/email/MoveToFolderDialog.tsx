@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { CSSTransition } from "react-transition-group";
 import { useLabelStore } from "@/stores/labelStore";
 import { useAccountStore } from "@/stores/accountStore";
@@ -11,6 +11,8 @@ import {
   removeThreadLabel,
   moveThread,
 } from "@/services/emailActions";
+import { moveThreadToAccount } from "@/services/crossAccountMove";
+import { getLabelsForAccount, type DbLabel } from "@/services/db/labels";
 import {
   Inbox,
   Archive,
@@ -19,6 +21,7 @@ import {
   Search,
   Tag,
   Folder,
+  AtSign,
 } from "lucide-react";
 
 interface MoveToFolderDialogProps {
@@ -57,22 +60,60 @@ export function MoveToFolderDialog({
   const activeAccountId = useAccountStore((s) => s.activeAccountId);
   const accounts = useAccountStore((s) => s.accounts);
 
-  const account = useMemo(
-    () => accounts.find((a) => a.id === activeAccountId),
-    [accounts, activeAccountId],
+  // Destination account — defaults to the active (source) account. Choosing a
+  // different account turns the operation into a cross-account move/assign.
+  const [destAccountId, setDestAccountId] = useState<string | null>(
+    activeAccountId,
   );
-  const isImap = account?.provider === "imap";
+  const [otherLabels, setOtherLabels] = useState<DbLabel[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Build the full destination list: system destinations + user labels
+  const isCrossAccount =
+    destAccountId !== null && destAccountId !== activeAccountId;
+
+  const destAccount = useMemo(
+    () => accounts.find((a) => a.id === destAccountId),
+    [accounts, destAccountId],
+  );
+  const isImap = destAccount?.provider === "imap";
+
+  // Load the destination account's folders/labels when it differs from source.
+  useEffect(() => {
+    if (!isCrossAccount || !destAccountId) {
+      setOtherLabels((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    let cancelled = false;
+    getLabelsForAccount(destAccountId)
+      .then((ls) => {
+        if (!cancelled) setOtherLabels(ls.filter((l) => l.type === "user"));
+      })
+      .catch(() => {
+        if (!cancelled) setOtherLabels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCrossAccount, destAccountId]);
+
+  // Build the full destination list: system destinations + user labels.
+  // For cross-account moves only Inbox + real folders make sense.
   const destinations = useMemo(() => {
-    const userLabels: Destination[] = labels.map((l) => ({
+    const sourceLabels = isCrossAccount
+      ? otherLabels.map((l) => ({ id: l.id, name: l.name }))
+      : labels.map((l) => ({ id: l.id, name: l.name }));
+    const userLabels: Destination[] = sourceLabels.map((l) => ({
       id: l.id,
       label: l.name,
       icon: Tag,
       type: "label" as const,
     }));
-    return [...SYSTEM_DESTINATIONS, ...userLabels];
-  }, [labels]);
+    const systemDests = isCrossAccount
+      ? [SYSTEM_DESTINATIONS[0]!] // Inbox only
+      : SYSTEM_DESTINATIONS;
+    return [...systemDests, ...userLabels];
+  }, [labels, otherLabels, isCrossAccount]);
 
   // Filter destinations by search query
   const filtered = useMemo(() => {
@@ -84,6 +125,36 @@ export function MoveToFolderDialog({
   const handleSelect = useCallback(
     async (dest: Destination) => {
       if (!activeAccountId || threadIds.length === 0) return;
+
+      // ---- Cross-account move / assign ----
+      if (isCrossAccount && destAccountId) {
+        setError(null);
+        setBusy(true);
+        try {
+          for (const threadId of threadIds) {
+            await moveThreadToAccount(
+              activeAccountId,
+              threadId,
+              destAccountId,
+              dest.id, // "INBOX" or folder path / label ID
+            );
+          }
+        } catch (err) {
+          setBusy(false);
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to move to the other mailbox",
+          );
+          return;
+        }
+        setBusy(false);
+        onClose();
+        window.dispatchEvent(new Event("velo-sync-done"));
+        return;
+      }
+
+      // ---- Same-account move ----
       onClose();
 
       for (const threadId of threadIds) {
@@ -121,7 +192,7 @@ export function MoveToFolderDialog({
       // Refresh thread list
       window.dispatchEvent(new Event("velo-sync-done"));
     },
-    [activeAccountId, threadIds, isImap, onClose],
+    [activeAccountId, threadIds, isImap, isCrossAccount, destAccountId, onClose],
   );
 
   const handleKeyDown = useCallback(
@@ -165,6 +236,9 @@ export function MoveToFolderDialog({
   const handleEntered = () => {
     setQuery("");
     setSelectedIdx(0);
+    setDestAccountId(activeAccountId);
+    setError(null);
+    setBusy(false);
     inputRef.current?.focus();
   };
 
@@ -200,11 +274,45 @@ export function MoveToFolderDialog({
                 setQuery(e.target.value);
                 setSelectedIdx(0);
               }}
-              placeholder="Move to..."
+              placeholder={
+                isCrossAccount ? "Assign to a folder in…" : "Move to..."
+              }
               className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary outline-none"
               autoFocus
             />
           </div>
+
+          {/* Destination mailbox selector (only with multiple accounts) */}
+          {accounts.length > 1 && (
+            <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-secondary overflow-x-auto">
+              <AtSign size={13} className="text-text-tertiary shrink-0" />
+              {accounts.map((a) => {
+                const isSelected = a.id === destAccountId;
+                const isSource = a.id === activeAccountId;
+                return (
+                  <button
+                    key={a.id}
+                    className={`shrink-0 px-2 py-0.5 rounded-full text-xs transition-colors cursor-pointer ${
+                      isSelected
+                        ? "bg-accent text-white"
+                        : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
+                    }`}
+                    onClick={() => {
+                      setDestAccountId(a.id);
+                      setSelectedIdx(0);
+                      setError(null);
+                    }}
+                    title={a.email}
+                  >
+                    {a.email}
+                    {isSource && (
+                      <span className="ml-1 opacity-70">(this mailbox)</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Destination list */}
           <div
@@ -225,7 +333,8 @@ export function MoveToFolderDialog({
                   key={dest.id}
                   role="option"
                   aria-selected={isSelected}
-                  className={`flex items-center gap-2.5 w-full px-3 py-1.5 text-sm text-left cursor-pointer transition-colors ${
+                  disabled={busy}
+                  className={`flex items-center gap-2.5 w-full px-3 py-1.5 text-sm text-left cursor-pointer transition-colors disabled:opacity-50 ${
                     isSelected
                       ? "bg-bg-selected text-text-primary"
                       : "text-text-secondary hover:bg-bg-hover"
@@ -251,6 +360,17 @@ export function MoveToFolderDialog({
               );
             })}
           </div>
+
+          {/* Error / busy banner */}
+          {(error || busy) && (
+            <div
+              className={`px-3 py-1.5 text-xs border-t border-border-secondary ${
+                error ? "text-danger" : "text-text-tertiary"
+              }`}
+            >
+              {busy ? "Moving to the other mailbox…" : error}
+            </div>
+          )}
 
           {/* Footer hint */}
           <div className="flex items-center gap-3 px-3 py-1.5 border-t border-border-secondary text-[10px] text-text-tertiary">
