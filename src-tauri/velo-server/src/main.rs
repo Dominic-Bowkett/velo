@@ -36,9 +36,14 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "velo_server=info,tower_http=info".into()),
+                // Include velo_core so IMAP/SMTP diagnostics are visible.
+                .unwrap_or_else(|_| "velo_server=info,velo_core=info,tower_http=info".into()),
         )
         .init();
+
+    // velo-core logs via the `log` crate; bridge those records into tracing so
+    // they appear in the same output as the server's tracing logs.
+    let _ = tracing_log::LogTracer::init();
 
     let control_db =
         std::env::var("VELO_CONTROL_DB").unwrap_or_else(|_| "velo-control.db".to_string());
