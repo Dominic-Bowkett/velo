@@ -1,10 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { isWeb } from "./transport";
 import { getUnreadInboxCount } from "./db/threads";
 
 let lastCount = -1;
 
 export async function updateBadgeCount(): Promise<void> {
+  // Taskbar badge + tray tooltip are desktop-only; nothing to do on the web.
+  if (isWeb()) return;
   try {
     const count = await getUnreadInboxCount();
     if (count === lastCount) return;

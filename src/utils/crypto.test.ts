@@ -5,6 +5,11 @@ const tauriFs = createMockTauriFs();
 
 vi.mock("@tauri-apps/plugin-fs", () => tauriFs.mock);
 
+// These tests cover the desktop (Tauri filesystem) key-storage path.
+vi.mock("@/services/transport", () => ({
+  isWeb: () => false,
+}));
+
 describe("crypto", () => {
   beforeEach(() => {
     vi.resetModules();

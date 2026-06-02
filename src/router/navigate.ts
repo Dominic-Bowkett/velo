@@ -33,6 +33,11 @@ export function navigateToLabel(
     return;
   }
 
+  if (label === "admin") {
+    router.navigate({ to: "/admin" });
+    return;
+  }
+
   if (label === "help") {
     router.navigate({ to: "/help/$topic", params: { topic: "getting-started" } });
     return;

@@ -51,6 +51,7 @@ export function buildImapConfig(
     password,
     auth_method: authMethod,
     accept_invalid_certs: !!account.accept_invalid_certs,
+    mailboxId: account.mailbox_id ?? undefined,
   };
 }
 
@@ -83,5 +84,6 @@ export function buildSmtpConfig(
     password,
     auth_method: authMethod,
     accept_invalid_certs: !!account.accept_invalid_certs,
+    mailboxId: account.mailbox_id ?? undefined,
   };
 }

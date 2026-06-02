@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "VITE_TARGET=web vite",
     "build": "tsc && vite build",
+    "build:web": "tsc && VITE_TARGET=web vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

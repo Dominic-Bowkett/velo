@@ -9,6 +9,8 @@ export interface EmailAttachment {
 
 export interface EmailDraft {
   from: string;
+  /** Optional display name for the From header → `"Name" <email>`. */
+  fromName?: string;
   to: string[];
   cc?: string[];
   bcc?: string[];
@@ -97,10 +99,18 @@ function generateMessageId(from: string): string {
   return `<${timestamp}.${random}@${domain}>`;
 }
 
+/** Format a From header value, quoting the display name per RFC 5322. */
+function formatFrom(email: string, name?: string): string {
+  if (!name || !name.trim()) return email;
+  // Escape embedded quotes/backslashes, then wrap in a quoted-string.
+  const escaped = name.replace(/([\\"])/g, "\\$1");
+  return `"${escaped}" <${email}>`;
+}
+
 export function buildRawEmail(draft: EmailDraft): string {
   const messageId = generateMessageId(draft.from);
   const lines: string[] = [
-    `From: ${draft.from}`,
+    `From: ${formatFrom(draft.from, draft.fromName)}`,
     `To: ${draft.to.join(", ")}`,
   ];
 

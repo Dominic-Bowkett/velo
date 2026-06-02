@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock Database before importing module under test
+// Mock the transport layer before importing module under test. connection.ts
+// now backs select/execute with the active transport instead of the Tauri SQL
+// plugin directly.
 const mockExecute = vi.fn();
 const mockSelect = vi.fn();
-const mockDb = { execute: mockExecute, select: mockSelect };
 
-vi.mock("@tauri-apps/plugin-sql", () => ({
-  default: {
-    load: vi.fn(() => Promise.resolve(mockDb)),
-  },
+vi.mock("../transport", () => ({
+  getTransport: () => ({ execute: mockExecute, select: mockSelect }),
+  isWeb: () => false,
 }));
 
 // Use dynamic import so mocks are in place

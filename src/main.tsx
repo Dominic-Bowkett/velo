@@ -4,6 +4,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { router } from "./router";
 import ThreadWindow from "./ThreadWindow";
 import ComposerWindow from "./ComposerWindow";
+import { AuthGate } from "./components/auth/AuthGate";
 import "./styles/globals.css";
 
 const params = new URLSearchParams(window.location.search);
@@ -13,7 +14,11 @@ const isComposerWindow = params.has("compose");
 function Root() {
   if (isThreadWindow) return <ThreadWindow />;
   if (isComposerWindow) return <ComposerWindow />;
-  return <RouterProvider router={router} />;
+  return (
+    <AuthGate>
+      <RouterProvider router={router} />
+    </AuthGate>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(

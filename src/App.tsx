@@ -12,6 +12,9 @@ import { useAccountStore } from "./stores/accountStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { runMigrations } from "./services/db/migrations";
 import { getAllAccounts } from "./services/db/accounts";
+import { isWeb } from "./services/transport";
+import { syncProvisionedMailboxes } from "./services/web/mailboxBootstrap";
+import { readNotifyParam } from "./services/web/notifyDeepLink";
 import { getSetting } from "./services/db/settings";
 import {
   startBackgroundSync,
@@ -295,6 +298,16 @@ export default function App() {
         // Load custom keyboard shortcuts
         await useShortcutStore.getState().loadKeyMap();
 
+        // Web: materialise the server-provisioned mailboxes as local accounts
+        // before reading them, so sync/compose work through the mailbox_id.
+        if (isWeb()) {
+          try {
+            await syncProvisionedMailboxes();
+          } catch (err) {
+            console.error("Failed to sync provisioned mailboxes:", err);
+          }
+        }
+
         const dbAccounts = await getAllAccounts();
         const mapped = dbAccounts.map((a) => ({
           id: a.id,
@@ -325,6 +338,22 @@ export default function App() {
         // Start background sync for active accounts
         if (activeIds.length > 0) {
           startBackgroundSync(activeIds);
+        }
+
+        // Web: if opened from a new-mail notification link, open that message
+        // once a sync has populated it locally (one-shot).
+        if (isWeb()) {
+          const tryOpen = async () => {
+            const { handleNotifyDeepLink } = await import(
+              "./services/web/notifyDeepLink"
+            );
+            const opened = await handleNotifyDeepLink();
+            if (opened) window.removeEventListener("velo-sync-done", tryOpen);
+          };
+          if (readNotifyParam()) {
+            window.addEventListener("velo-sync-done", tryOpen);
+            void tryOpen();
+          }
         }
 
         // Start snooze, scheduled send, follow-up, bundle, and queue checkers

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand } from '../transport';
 
-// Mock @tauri-apps/api/core
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
+// Mock the transport layer (tauriCommands now routes through invokeCommand,
+// which dispatches to the Tauri IPC or HTTP transport depending on target).
+vi.mock('../transport', () => ({
+  invokeCommand: vi.fn(),
 }));
 
-const mockInvoke = vi.mocked(invoke);
+const mockInvoke = vi.mocked(invokeCommand);
 
 import {
   imapTestConnection,

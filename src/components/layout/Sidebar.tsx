@@ -11,6 +11,7 @@ import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { useSmartFolderStore } from "@/stores/smartFolderStore";
 import { useActiveLabel, useActiveCategory } from "@/hooks/useRouteNavigation";
 import { navigateToLabel } from "@/router/navigate";
+import { useAuthStore } from "@/stores/authStore";
 import {
   Inbox,
   Star,
@@ -207,6 +208,7 @@ const LABELS_COLLAPSED_COUNT = 3;
 
 export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
   const activeLabel = useActiveLabel();
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const sidebarNavConfig = useUIStore((s) => s.sidebarNavConfig);
   const taskIncompleteCount = useTaskStore((s) => s.incompleteCount);
@@ -603,6 +605,21 @@ export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
 
       {/* Bottom bar: Settings + collapse toggle */}
       <div className={`py-2 border-t border-border-primary flex ${collapsed ? "flex-col items-center gap-1 px-2" : "items-center gap-1 px-3"}`}>
+        {isAdmin && (
+          <button
+            onClick={() => navigateToLabel("admin")}
+            className={`flex items-center text-sm rounded-md transition-colors ${
+              collapsed ? "p-2 justify-center" : "p-2"
+            } ${
+              activeLabel === "admin"
+                ? "bg-accent/10 text-accent font-medium"
+                : "text-sidebar-text hover:bg-sidebar-hover"
+            }`}
+            title="Admin"
+          >
+            <Users size={18} className="shrink-0" />
+          </button>
+        )}
         <button
           onClick={() => navigateToLabel("settings")}
           className={`flex items-center text-sm rounded-md transition-colors ${

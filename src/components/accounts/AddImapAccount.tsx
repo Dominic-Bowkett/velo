@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand as invoke } from "../../services/transport";
 import {
   ArrowLeft,
   ArrowRight,

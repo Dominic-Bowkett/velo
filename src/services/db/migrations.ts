@@ -775,6 +775,14 @@ const MIGRATIONS = [
     description: "Accept self-signed certificates for IMAP/SMTP",
     sql: `ALTER TABLE accounts ADD COLUMN accept_invalid_certs INTEGER DEFAULT 0;`,
   },
+  {
+    version: 24,
+    description:
+      "Link accounts to a server-provisioned mailbox (web). When set, IMAP/SMTP " +
+      "operations send this mailbox_id instead of credentials, which the server " +
+      "resolves and authorizes.",
+    sql: `ALTER TABLE accounts ADD COLUMN mailbox_id TEXT;`,
+  },
 ];
 
 /**
