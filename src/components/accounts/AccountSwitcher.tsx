@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useAccountStore, type Account } from "@/stores/accountStore";
 import { ChevronDown, Check, Plus, UserPlus, Calendar } from "lucide-react";
 import { useClickOutside } from "@/hooks/useClickOutside";
+import { syncAccount } from "@/services/gmail/syncManager";
 
 interface AccountSwitcherProps {
   collapsed: boolean;
@@ -24,6 +25,11 @@ export function AccountSwitcher({
     (id: string) => {
       setActiveAccount(id);
       setOpen(false);
+      // Pull this mailbox's mail right away rather than waiting for the next
+      // background cycle — important for the admin viewing sub-users' inboxes.
+      syncAccount(id)
+        .then(() => window.dispatchEvent(new Event("velo-sync-done")))
+        .catch((err) => console.warn(`Sync on account switch failed for ${id}:`, err));
     },
     [setActiveAccount],
   );
