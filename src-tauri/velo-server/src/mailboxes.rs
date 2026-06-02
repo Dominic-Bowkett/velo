@@ -260,6 +260,12 @@ async fn list_mine(
     Extension(user): Extension<User>,
 ) -> Response {
     let mut control = state.control.lock().await;
+    tracing::info!(
+        "list_mine: user={} role={} is_admin={}",
+        user.email,
+        user.role,
+        user.is_admin()
+    );
     // Admin sees all mailboxes; members see only their own.
     let rows = if user.is_admin() {
         sqlx::query_as::<_, MailboxRow>("SELECT * FROM mailboxes ORDER BY email")
@@ -297,6 +303,14 @@ pub async fn resolve_imap(
     if !can_access(user, &m) {
         return Err("Not authorized for this mailbox".to_string());
     }
+    tracing::info!(
+        "resolve_imap: user={} ({}) mailbox={} email={} host={}",
+        user.email,
+        user.role,
+        mailbox_id,
+        m.email,
+        m.imap_host
+    );
     let password = server_crypto::decrypt(&m.password_enc)?;
     Ok(ImapConfig {
         host: m.imap_host,
