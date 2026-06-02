@@ -5,8 +5,10 @@
  */
 
 import { exists, readTextFile, writeTextFile, mkdir, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { isWeb } from "../services/transport";
 
 const KEY_FILE_NAME = "velo.key";
+const WEB_KEY_STORAGE = "velo-enc-key";
 const ALGORITHM = "AES-GCM";
 const KEY_LENGTH = 256;
 const IV_LENGTH = 12;
@@ -50,7 +52,19 @@ async function getOrCreateKey(): Promise<CryptoKey> {
   if (cachedKey) return cachedKey;
 
   let rawKeyB64: string;
-  if (await exists(KEY_FILE_NAME, FS_OPTIONS)) {
+  if (isWeb()) {
+    // Web: the encryption key is held in browser storage for now. Phase 3 moves
+    // encrypt/decrypt entirely server-side so secrets never reach the browser.
+    const existing = localStorage.getItem(WEB_KEY_STORAGE);
+    if (existing) {
+      rawKeyB64 = existing;
+    } else {
+      const rawKey = new Uint8Array(KEY_LENGTH / 8);
+      crypto.getRandomValues(rawKey);
+      rawKeyB64 = base64Encode(rawKey);
+      localStorage.setItem(WEB_KEY_STORAGE, rawKeyB64);
+    }
+  } else if (await exists(KEY_FILE_NAME, FS_OPTIONS)) {
     rawKeyB64 = (await readTextFile(KEY_FILE_NAME, FS_OPTIONS)).trim();
   } else {
     // Generate a new random key

@@ -1,11 +1,21 @@
-import Database from "@tauri-apps/plugin-sql";
+import { getTransport, type ExecuteResult } from "../transport";
 
-let db: Database | null = null;
+/**
+ * Minimal database surface used across the db service layer. Backed by the
+ * active transport: the Tauri SQL plugin on desktop, or the velo-server SQL
+ * gateway over HTTP on the web. Only `select`/`execute` are used anywhere.
+ */
+export interface Db {
+  select<T>(query: string, params?: unknown[]): Promise<T>;
+  execute(query: string, params?: unknown[]): Promise<ExecuteResult>;
+}
 
-export async function getDb(): Promise<Database> {
-  if (!db) {
-    db = await Database.load("sqlite:velo.db");
-  }
+const db: Db = {
+  select: (query, params = []) => getTransport().select(query, params),
+  execute: (query, params = []) => getTransport().execute(query, params),
+};
+
+export async function getDb(): Promise<Db> {
   return db;
 }
 
@@ -45,7 +55,7 @@ export function buildDynamicUpdate(
  */
 let txQueue: Promise<void> = Promise.resolve();
 
-export async function withTransaction(fn: (db: Database) => Promise<void>): Promise<void> {
+export async function withTransaction(fn: (db: Db) => Promise<void>): Promise<void> {
   // Queue this transaction behind any currently-running one.
   // This serialises all transactions without blocking non-transactional reads.
   const prev = txQueue;
