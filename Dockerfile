@@ -35,13 +35,15 @@ WORKDIR /app
 COPY --from=web /app/dist ./dist
 COPY --from=server /build/src-tauri/target/release/velo-server ./velo-server
 
-# Persisted data lives here — mount a volume at /data to keep it across restarts.
+# Persisted data lives at /data. Configure persistent storage through your
+# host's dashboard (Railway "Volumes" mounted at /data, Render disk, etc.).
+# NOTE: no `VOLUME` directive — Railway rejects Dockerfiles that use it; the
+# mount is provided by the platform's volume feature instead.
 # VELO_BIND is intentionally unset so hosts that inject $PORT (Railway/Render)
 # are honoured; the server falls back to 0.0.0.0:8080 when neither is set.
 ENV VELO_STATIC_DIR=/app/dist \
     VELO_CONTROL_DB=/data/control.db \
     VELO_DATA_DIR=/data
-VOLUME ["/data"]
 EXPOSE 8080
 
 CMD ["/app/velo-server"]
