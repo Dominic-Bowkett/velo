@@ -1,0 +1,26 @@
+[package]
+name = "velo-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Shared IMAP/SMTP/OAuth protocol logic for Velo (desktop + server)"
+license = "Apache-2.0"
+
+[lib]
+name = "velo_core"
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tokio = { version = "1", features = ["net", "io-util", "sync", "macros", "rt", "time"] }
+futures = "0.3"
+async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+mail-parser = "0.9"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-native-tls", "builder"] }
+base64 = "0.22"
+utf7-imap = "0.3"
+socket2 = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json"] }

@@ -7,9 +7,7 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::MacosLauncher;
 
 mod commands;
-mod imap;
 mod oauth;
-mod smtp;
 
 #[tauri::command]
 fn close_splashscreen(app: tauri::AppHandle) {

@@ -1,0 +1,22 @@
+[package]
+name = "velo-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Self-hosted web backend for Velo (IMAP/SMTP/OAuth over HTTP + SQL gateway)"
+license = "Apache-2.0"
+
+[[bin]]
+name = "velo-server"
+path = "src/main.rs"
+
+[dependencies]
+velo-core = { path = "../velo-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
