@@ -287,6 +287,20 @@ export async function syncAccount(accountId: string): Promise<void> {
 }
 
 /**
+ * Sync a single account NOW, bypassing the background-sync queue.
+ *
+ * The normal sync queue runs accounts one at a time, so a freshly-switched-to
+ * account can be stuck for minutes behind a large account's initial sync. When
+ * a user explicitly switches accounts we want their mailbox immediately, so
+ * this runs the sync directly. Concurrent DB writes are already serialised by
+ * the transaction mutex in connection.ts, so this is safe to overlap with a
+ * background sync.
+ */
+export async function syncAccountNow(accountId: string): Promise<void> {
+  return syncAccountInternal(accountId);
+}
+
+/**
  * Start the background sync timer for all accounts.
  * When `skipImmediateSync` is true the first periodic sync is deferred to the
  * next interval tick — useful when the caller already triggered a sync for a

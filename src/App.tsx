@@ -324,7 +324,13 @@ export default function App() {
         await initializeClients();
 
         // Fetch send-as aliases for each active email account (skip CalDAV-only)
-        const activeIds = mapped.filter((a) => a.isActive).map((a) => a.id);
+        // Sync the currently-active account first so the visible mailbox loads
+        // promptly; the rest follow in the background queue.
+        const activeStoreId = useAccountStore.getState().activeAccountId;
+        const activeIds = mapped
+          .filter((a) => a.isActive)
+          .map((a) => a.id)
+          .sort((a, b) => (a === activeStoreId ? -1 : b === activeStoreId ? 1 : 0));
         const emailAccountIds = mapped.filter((a) => a.isActive && a.provider !== "caldav").map((a) => a.id);
         for (const accountId of emailAccountIds) {
           try {
