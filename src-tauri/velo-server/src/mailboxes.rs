@@ -52,6 +52,18 @@ struct MailboxRow {
     accept_invalid_certs: i64,
 }
 
+impl MailboxRow {
+    /// IMAP/SMTP login username. Falls back to the mailbox email when no
+    /// username is set — treating an empty/whitespace string as "not set"
+    /// (the admin form submits "" when the field is left blank).
+    fn login_username(&self) -> String {
+        match self.username.as_deref().map(str::trim) {
+            Some(u) if !u.is_empty() => u.to_string(),
+            _ => self.email.clone(),
+        }
+    }
+}
+
 /// Public (non-secret) view of a mailbox — never includes the password.
 #[derive(Serialize)]
 struct MailboxView {
@@ -119,7 +131,7 @@ pub struct MailboxCreds {
 
 fn row_to_creds(m: MailboxRow) -> Result<MailboxCreds, String> {
     let password = server_crypto::decrypt(&m.password_enc)?;
-    let username = m.username.clone().unwrap_or_else(|| m.email.clone());
+    let username = m.login_username();
     Ok(MailboxCreds {
         id: m.id.clone(),
         owner_user_id: m.owner_user_id.clone(),
@@ -311,12 +323,13 @@ pub async fn resolve_imap(
         m.email,
         m.imap_host
     );
+    let username = m.login_username();
     let password = server_crypto::decrypt(&m.password_enc)?;
     Ok(ImapConfig {
         host: m.imap_host,
         port: m.imap_port as u16,
         security: m.imap_security,
-        username: m.username.unwrap_or(m.email),
+        username,
         password,
         auth_method: "password".to_string(),
         accept_invalid_certs: m.accept_invalid_certs != 0,
@@ -335,14 +348,55 @@ pub async fn resolve_smtp(
     if !can_access(user, &m) {
         return Err("Not authorized for this mailbox".to_string());
     }
+    let username = m.login_username();
     let password = server_crypto::decrypt(&m.password_enc)?;
     Ok(SmtpConfig {
         host: m.smtp_host,
         port: m.smtp_port as u16,
         security: m.smtp_security,
-        username: m.username.unwrap_or(m.email),
+        username,
         password,
         auth_method: "password".to_string(),
         accept_invalid_certs: m.accept_invalid_certs != 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MailboxRow;
+
+    fn row(username: Option<&str>) -> MailboxRow {
+        MailboxRow {
+            id: "m1".into(),
+            owner_user_id: "u1".into(),
+            email: "test@example.com".into(),
+            display_name: None,
+            imap_host: "imap.example.com".into(),
+            imap_port: 993,
+            imap_security: "tls".into(),
+            smtp_host: "smtp.example.com".into(),
+            smtp_port: 465,
+            smtp_security: "tls".into(),
+            username: username.map(|s| s.to_string()),
+            password_enc: String::new(),
+            accept_invalid_certs: 0,
+        }
+    }
+
+    #[test]
+    fn login_username_falls_back_to_email_when_none() {
+        assert_eq!(row(None).login_username(), "test@example.com");
+    }
+
+    #[test]
+    fn login_username_falls_back_when_empty_or_whitespace() {
+        // The admin form submits "" when the field is left blank — must fall back.
+        assert_eq!(row(Some("")).login_username(), "test@example.com");
+        assert_eq!(row(Some("   ")).login_username(), "test@example.com");
+    }
+
+    #[test]
+    fn login_username_uses_explicit_value() {
+        assert_eq!(row(Some("custom-login")).login_username(), "custom-login");
+    }
 }
