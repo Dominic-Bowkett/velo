@@ -16,8 +16,39 @@ fn decode_base64url(input: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Base64 decode error: {}", e))
 }
 
+/// Resolve a hostname to an IPv4 address string, if one exists.
+///
+/// Cloud containers (e.g. Railway) often have no outbound IPv6 route. Left to
+/// its own DNS, lettre may pick the host's AAAA (IPv6) record and fail with
+/// "Network is unreachable (os error 101)". We resolve to IPv4 ourselves and
+/// connect by IP, while keeping the original hostname for TLS SNI / cert checks.
+/// Returns `None` if no IPv4 address is found (e.g. an IPv6-only host).
+async fn resolve_ipv4(host: &str, port: u16) -> Option<String> {
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(addrs) => addrs
+            .into_iter()
+            .find(|a| a.is_ipv4())
+            .map(|a| a.ip().to_string()),
+        Err(_) => None,
+    }
+}
+
+/// Build the TLS parameters for a connection. The hostname (not the IP we may
+/// connect to) is used so SNI and certificate validation are correct.
+fn tls_params(config: &SmtpConfig) -> Result<lettre::transport::smtp::client::TlsParameters, String> {
+    let mut builder = TlsParametersBuilder::new(config.host.clone());
+    if config.accept_invalid_certs {
+        builder = builder
+            .dangerous_accept_invalid_certs(true)
+            .dangerous_accept_invalid_hostnames(true);
+    }
+    builder
+        .build()
+        .map_err(|e| format!("SMTP TLS params error: {}", e))
+}
+
 /// Build an async SMTP transport from the given config.
-fn build_transport(
+async fn build_transport(
     config: &SmtpConfig,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
     let credentials = Credentials::new(config.username.clone(), config.password.clone());
@@ -29,48 +60,36 @@ fn build_transport(
         vec![Mechanism::Plain, Mechanism::Login]
     };
 
+    // Connect by IPv4 address when resolvable; fall back to the hostname.
+    let connect_host = resolve_ipv4(&config.host, config.port)
+        .await
+        .unwrap_or_else(|| config.host.clone());
+
     let transport = match config.security.as_str() {
         "tls" => {
-            // Implicit TLS (typically port 465)
-            let mut builder = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
+            // Implicit TLS (typically port 465). TLS params use the real
+            // hostname even though we connect by IP.
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&connect_host)
                 .map_err(|e| format!("SMTP relay error: {}", e))?
                 .port(config.port)
                 .credentials(credentials)
-                .authentication(auth_mechanisms);
-
-            if config.accept_invalid_certs {
-                let tls_params = TlsParametersBuilder::new(config.host.clone())
-                    .dangerous_accept_invalid_certs(true)
-                    .dangerous_accept_invalid_hostnames(true)
-                    .build()
-                    .map_err(|e| format!("SMTP TLS params error: {}", e))?;
-                builder = builder.tls(Tls::Required(tls_params));
-            }
-
-            builder.build()
+                .authentication(auth_mechanisms)
+                .tls(Tls::Wrapper(tls_params(config)?))
+                .build()
         }
         "starttls" => {
-            // STARTTLS (typically port 587)
-            let mut builder = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
+            // STARTTLS (typically port 587).
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&connect_host)
                 .map_err(|e| format!("SMTP STARTTLS error: {}", e))?
                 .port(config.port)
                 .credentials(credentials)
-                .authentication(auth_mechanisms);
-
-            if config.accept_invalid_certs {
-                let tls_params = TlsParametersBuilder::new(config.host.clone())
-                    .dangerous_accept_invalid_certs(true)
-                    .dangerous_accept_invalid_hostnames(true)
-                    .build()
-                    .map_err(|e| format!("SMTP TLS params error: {}", e))?;
-                builder = builder.tls(Tls::Required(tls_params));
-            }
-
-            builder.build()
+                .authentication(auth_mechanisms)
+                .tls(Tls::Required(tls_params(config)?))
+                .build()
         }
         _ => {
             // Plain / no encryption (typically port 25) — not recommended
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&connect_host)
                 .port(config.port)
                 .credentials(credentials)
                 .authentication(auth_mechanisms)
@@ -153,7 +172,7 @@ pub async fn send_raw_email(
 ) -> Result<SmtpSendResult, String> {
     let raw_bytes = decode_base64url(raw_email_base64url)?;
     let envelope = extract_envelope(&raw_bytes)?;
-    let transport = build_transport(config)?;
+    let transport = build_transport(config).await?;
 
     transport
         .send_raw(&envelope, &raw_bytes)
@@ -167,7 +186,7 @@ pub async fn send_raw_email(
 
 /// Test SMTP connectivity by connecting, authenticating, and disconnecting.
 pub async fn test_connection(config: &SmtpConfig) -> Result<SmtpSendResult, String> {
-    let transport = build_transport(config)?;
+    let transport = build_transport(config).await?;
 
     transport
         .test_connection()
@@ -186,6 +205,23 @@ pub async fn test_connection(config: &SmtpConfig) -> Result<SmtpSendResult, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_resolve_ipv4_returns_ipv4_for_localhost() {
+        // localhost resolves to 127.0.0.1 (IPv4) on essentially every system.
+        let ip = resolve_ipv4("localhost", 587).await;
+        if let Some(ip) = ip {
+            assert!(ip.parse::<std::net::Ipv4Addr>().is_ok(), "expected IPv4, got {ip}");
+        }
+        // If localhost is IPv6-only in some sandbox, resolve_ipv4 returns None,
+        // and build_transport falls back to the hostname — also acceptable.
+    }
+
+    #[tokio::test]
+    async fn test_resolve_ipv4_none_for_bogus_host() {
+        let ip = resolve_ipv4("nonexistent.invalid.bogus.host.example", 587).await;
+        assert!(ip.is_none());
+    }
 
     #[test]
     fn test_decode_base64url_valid() {
