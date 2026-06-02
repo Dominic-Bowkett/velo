@@ -51,6 +51,15 @@ async function upsertMailboxAccount(
   accountId: string,
   m: Mailbox,
 ): Promise<void> {
+  // accounts.email has a UNIQUE constraint. A stale row may exist with this
+  // email but a DIFFERENT id (e.g. a previously-bootstrapped account whose
+  // mailbox id changed, or a manually-added account). Remove those first so the
+  // upsert below doesn't hit "UNIQUE constraint failed: accounts.email".
+  await db.execute("DELETE FROM accounts WHERE email = $1 AND id != $2", [
+    m.email,
+    accountId,
+  ]);
+
   await db.execute(
     `INSERT INTO accounts (
         id, email, display_name, avatar_url, access_token, refresh_token,
