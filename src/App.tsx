@@ -364,17 +364,15 @@ export default function App() {
         startQueueProcessor();
         startPreCacheManager();
 
-        // Initialize notifications
-        await initNotifications();
-
-        // Initialize global compose shortcut
-        await initGlobalShortcut();
-
-        // Initialize deep link handler
-        deepLinkCleanupRef.current = await initDeepLinkHandler();
-
-        // Initial badge count
-        await updateBadgeCount();
+        // Desktop-only integrations (OS notifications, global shortcut, mailto
+        // deep links, taskbar badge, auto-update). These call Tauri APIs that
+        // don't exist on the web, so skip them there.
+        if (!isWeb()) {
+          await initNotifications();
+          await initGlobalShortcut();
+          deepLinkCleanupRef.current = await initDeepLinkHandler();
+          await updateBadgeCount();
+        }
 
         // Load initial task count
         const activeAcct = useAccountStore.getState().activeAccountId;
@@ -383,13 +381,17 @@ export default function App() {
           useTaskStore.getState().setIncompleteCount(count);
         }
 
-        // Start auto-update checker
-        startUpdateChecker();
+        // Start auto-update checker (desktop only)
+        if (!isWeb()) {
+          startUpdateChecker();
+        }
       } catch (err) {
         console.error("Failed to initialize:", err);
       }
       setInitialized(true);
-      invoke("close_splashscreen").catch(() => {});
+      if (!isWeb()) {
+        invoke("close_splashscreen").catch(() => {});
+      }
     }
 
     init();

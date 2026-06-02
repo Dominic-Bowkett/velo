@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X, Copy } from "lucide-react";
+import { isWeb } from "@/services/transport";
 
 const isMac = navigator.userAgent.includes("Macintosh");
 
@@ -8,6 +9,11 @@ export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
+    // The custom window titlebar is desktop-only. On the web there is no Tauri
+    // window runtime, so calling getCurrentWindow() would throw
+    // ("Cannot read properties of undefined (reading 'metadata')").
+    if (isWeb()) return;
+
     const appWindow = getCurrentWindow();
     appWindow.isMaximized().then(setMaximized);
 
@@ -19,6 +25,9 @@ export function TitleBar() {
 
     return () => { unlisten?.(); };
   }, []);
+
+  // Browser provides its own window chrome — render nothing on the web.
+  if (isWeb()) return null;
 
   const handleMinimize = () => getCurrentWindow().minimize();
   const handleMaximize = () => getCurrentWindow().toggleMaximize();
