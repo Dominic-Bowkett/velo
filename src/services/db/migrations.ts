@@ -929,4 +929,30 @@ export async function runMigrations(): Promise<void> {
       "INSERT OR REPLACE INTO settings (key, value) VALUES ('imap_attachment_repair_v1', '1')",
     );
   }
+
+  // One-time repair: re-sync IMAP mail with the corrected INBOX folder mapping.
+  // Previously, servers that report a special-use flag on the INBOX mailbox
+  // (e.g. Hostinger) mislabelled inbox mail as "All Mail", leaving the Inbox
+  // empty. Clearing folder sync state + IMAP messages/threads forces a full
+  // re-fetch so messages get the correct INBOX label. Runs once.
+  const inboxRepairFlag = await db.select<{ value: string }[]>(
+    "SELECT value FROM settings WHERE key = 'imap_inbox_mapping_repair_v1'",
+  );
+  if (inboxRepairFlag.length === 0) {
+    const imapAccounts = await db.select<{ id: string }[]>(
+      "SELECT id FROM accounts WHERE provider = 'imap'",
+    );
+    if (imapAccounts.length > 0) {
+      console.log("[repair] Re-syncing IMAP mail with corrected INBOX mapping...");
+      const imapFilter =
+        "(SELECT id FROM accounts WHERE provider = 'imap')";
+      await db.execute(`DELETE FROM thread_labels WHERE account_id IN ${imapFilter}`);
+      await db.execute(`DELETE FROM messages WHERE account_id IN ${imapFilter}`);
+      await db.execute(`DELETE FROM threads WHERE account_id IN ${imapFilter}`);
+      await db.execute(`DELETE FROM folder_sync_state WHERE account_id IN ${imapFilter}`);
+    }
+    await db.execute(
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('imap_inbox_mapping_repair_v1', '1')",
+    );
+  }
 }

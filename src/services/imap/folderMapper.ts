@@ -64,7 +64,18 @@ export interface FolderLabelMapping {
  * and finally uses a user-folder prefix for unrecognized folders.
  */
 export function mapFolderToLabel(folder: ImapFolder): FolderLabelMapping {
-  // Check special-use attribute first
+  // RFC 3501: the inbox is ALWAYS the mailbox named "INBOX" (case-insensitive).
+  // Check this first and unconditionally — some servers (e.g. Hostinger) also
+  // report a special-use flag on it that would otherwise route inbox mail to
+  // the wrong label (the "everything shows in All Mail, Inbox is empty" bug).
+  if (
+    folder.path.toLowerCase() === "inbox" ||
+    folder.raw_path.toLowerCase() === "inbox"
+  ) {
+    return SPECIAL_USE_MAP["\\Inbox"]!;
+  }
+
+  // Check special-use attribute next
   if (folder.special_use) {
     const mapping = SPECIAL_USE_MAP[folder.special_use];
     if (mapping) {

@@ -9,6 +9,25 @@ describe("mapFolderToLabel", () => {
     expect(result).toEqual({ labelId: "INBOX", labelName: "Inbox", type: "system" });
   });
 
+  it("maps the canonical INBOX mailbox to INBOX regardless of a conflicting special_use", () => {
+    // Some servers (e.g. Hostinger) report a special-use flag on INBOX that
+    // would otherwise route inbox mail to All Mail. INBOX must always win.
+    const folder = createMockImapFolder({
+      path: "INBOX",
+      name: "INBOX",
+      raw_path: "INBOX",
+      special_use: "\\All",
+    });
+    const result = mapFolderToLabel(folder);
+    expect(result).toEqual({ labelId: "INBOX", labelName: "Inbox", type: "system" });
+  });
+
+  it("maps a lowercase 'inbox' path to INBOX", () => {
+    const folder = createMockImapFolder({ path: "inbox", name: "inbox", raw_path: "inbox" });
+    const result = mapFolderToLabel(folder);
+    expect(result.labelId).toBe("INBOX");
+  });
+
   it("maps special_use \\Sent to SENT label", () => {
     const folder = createMockImapFolder({ path: "Sent", name: "Sent", special_use: "\\Sent" });
     const result = mapFolderToLabel(folder);
