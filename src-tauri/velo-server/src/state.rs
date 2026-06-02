@@ -69,6 +69,7 @@ impl AppState {
         let mut conn = open_sqlite(control_path).await;
         control_migrate(&mut conn).await;
         crate::profile::migrate(&mut conn).await;
+        crate::notifier::migrate(&mut conn).await;
 
         let state = AppState {
             control: Arc::new(Mutex::new(conn)),
@@ -111,6 +112,18 @@ impl AppState {
         .await
         .expect("failed to create admin user");
         tracing::info!("Bootstrapped admin user {email}");
+    }
+
+    /// Look up a user's email by id (server-internal).
+    pub async fn user_email(&self, user_id: &str) -> Option<String> {
+        let mut control = self.control.lock().await;
+        let row: Option<(String,)> = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&mut *control)
+            .await
+            .ok()
+            .flatten();
+        row.map(|(e,)| e)
     }
 
     /// Get (opening + caching if needed) the data DB connection for a user.

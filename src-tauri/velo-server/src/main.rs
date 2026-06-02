@@ -18,6 +18,7 @@ mod auth;
 mod db_gateway;
 mod email_api;
 mod mailboxes;
+mod notifier;
 mod oauth_api;
 mod profile;
 mod server_crypto;
@@ -50,6 +51,10 @@ async fn main() {
     server_crypto::init_key(&key_file);
 
     let state = AppState::init(&control_db, data_dir).await;
+
+    // Background: email users when new mail arrives in their mailbox.
+    notifier::spawn(state.clone());
+
     let app = build_app(state);
 
     let bind = std::env::var("VELO_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());

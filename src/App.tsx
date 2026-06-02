@@ -14,6 +14,7 @@ import { runMigrations } from "./services/db/migrations";
 import { getAllAccounts } from "./services/db/accounts";
 import { isWeb } from "./services/transport";
 import { syncProvisionedMailboxes } from "./services/web/mailboxBootstrap";
+import { readNotifyParam } from "./services/web/notifyDeepLink";
 import { getSetting } from "./services/db/settings";
 import {
   startBackgroundSync,
@@ -337,6 +338,22 @@ export default function App() {
         // Start background sync for active accounts
         if (activeIds.length > 0) {
           startBackgroundSync(activeIds);
+        }
+
+        // Web: if opened from a new-mail notification link, open that message
+        // once a sync has populated it locally (one-shot).
+        if (isWeb()) {
+          const tryOpen = async () => {
+            const { handleNotifyDeepLink } = await import(
+              "./services/web/notifyDeepLink"
+            );
+            const opened = await handleNotifyDeepLink();
+            if (opened) window.removeEventListener("velo-sync-done", tryOpen);
+          };
+          if (readNotifyParam()) {
+            window.addEventListener("velo-sync-done", tryOpen);
+            void tryOpen();
+          }
         }
 
         // Start snooze, scheduled send, follow-up, bundle, and queue checkers

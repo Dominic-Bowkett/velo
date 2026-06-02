@@ -107,6 +107,71 @@ async fn fetch_mailbox(state: &AppState, id: &str) -> Option<MailboxRow> {
         .flatten()
 }
 
+/// Server-internal: one mailbox's owner + email + resolved IMAP config. Used by
+/// the notification worker (no user context — runs as the server).
+pub struct MailboxCreds {
+    pub id: String,
+    pub owner_user_id: String,
+    pub email: String,
+    pub imap: ImapConfig,
+    pub smtp: SmtpConfig,
+}
+
+fn row_to_creds(m: MailboxRow) -> Result<MailboxCreds, String> {
+    let password = server_crypto::decrypt(&m.password_enc)?;
+    let username = m.username.clone().unwrap_or_else(|| m.email.clone());
+    Ok(MailboxCreds {
+        id: m.id.clone(),
+        owner_user_id: m.owner_user_id.clone(),
+        email: m.email.clone(),
+        imap: ImapConfig {
+            host: m.imap_host.clone(),
+            port: m.imap_port as u16,
+            security: m.imap_security.clone(),
+            username: username.clone(),
+            password: password.clone(),
+            auth_method: "password".to_string(),
+            accept_invalid_certs: m.accept_invalid_certs != 0,
+        },
+        smtp: SmtpConfig {
+            host: m.smtp_host,
+            port: m.smtp_port as u16,
+            security: m.smtp_security,
+            username,
+            password,
+            auth_method: "password".to_string(),
+            accept_invalid_certs: m.accept_invalid_certs != 0,
+        },
+    })
+}
+
+/// All provisioned mailboxes with resolved credentials (server-internal).
+pub async fn all_with_creds(state: &AppState) -> Vec<MailboxCreds> {
+    let mut control = state.control.lock().await;
+    let rows = sqlx::query_as::<_, MailboxRow>("SELECT * FROM mailboxes")
+        .fetch_all(&mut *control)
+        .await
+        .unwrap_or_default();
+    drop(control);
+    rows.into_iter().filter_map(|r| row_to_creds(r).ok()).collect()
+}
+
+/// The mailbox used to SEND notification emails: the first mailbox owned by an
+/// admin user. None if no admin has a provisioned mailbox.
+pub async fn admin_sender(state: &AppState) -> Option<MailboxCreds> {
+    let mut control = state.control.lock().await;
+    let row = sqlx::query_as::<_, MailboxRow>(
+        "SELECT m.* FROM mailboxes m JOIN users u ON u.id = m.owner_user_id \
+         WHERE u.role = 'admin' ORDER BY m.created_at LIMIT 1",
+    )
+    .fetch_optional(&mut *control)
+    .await
+    .ok()
+    .flatten()?;
+    drop(control);
+    row_to_creds(row).ok()
+}
+
 // ---------- admin endpoints ----------
 
 async fn list_all(State(state): State<AppState>) -> Response {
