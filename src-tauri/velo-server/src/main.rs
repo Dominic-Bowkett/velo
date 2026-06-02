@@ -19,6 +19,7 @@ mod db_gateway;
 mod email_api;
 mod mailboxes;
 mod oauth_api;
+mod profile;
 mod server_crypto;
 mod state;
 
@@ -71,14 +72,17 @@ fn build_app(state: AppState) -> Router {
         .nest("/oauth", oauth_api::router())
         .nest("/db", db_gateway::router(state.clone()))
         .merge(mailboxes::member_router(state.clone()))
+        .merge(profile::member_router(state.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_user,
         ));
 
-    // Admin-only API: provisioned mailbox management (create/list/delete).
-    let admin_mailboxes = Router::new()
+    // Admin-only API: provisioned mailbox management + profile (display name /
+    // signature, global or per-user).
+    let admin_only = Router::new()
         .nest("/admin", mailboxes::admin_router(state.clone()))
+        .nest("/admin", profile::admin_router(state.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_admin,
@@ -89,7 +93,7 @@ fn build_app(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router(state.clone()))
-        .merge(admin_mailboxes)
+        .merge(admin_only)
         .merge(protected);
 
     let mut app = Router::new().nest("/api", api).layer(CorsLayer::permissive());
@@ -423,5 +427,108 @@ mod tests {
         .await;
         assert_eq!(body.as_array().unwrap().len(), 1);
         assert_eq!(body[0]["email"], "mark@ex.com");
+    }
+
+    /// Helper: admin creates a mailbox for an owner, returns its id.
+    async fn create_mailbox(app: &axum::Router, admin: &str, owner: &str, email: &str) -> String {
+        let mut r = json_post(
+            "/api/admin/mailboxes",
+            json!({
+                "ownerUserId": owner, "email": email,
+                "imapHost": "imap.ex.com", "imapPort": 993, "imapSecurity": "tls",
+                "smtpHost": "smtp.ex.com", "smtpPort": 465, "smtpSecurity": "tls",
+                "password": "pw"
+            }),
+        );
+        r.headers_mut().insert("cookie", admin.parse().unwrap());
+        let (_, body, _) = send(app, r).await;
+        body["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn member_cannot_use_another_users_mailbox_id() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let mark_id = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        create_member(&app, &admin, "jane@ex.com", "janepass123").await;
+        // Mailbox owned by Mark.
+        let mark_box = create_mailbox(&app, &admin, &mark_id, "mark@ex.com").await;
+
+        // Jane (a different member) tries to operate on Mark's mailbox by id.
+        let jane = login(&app, "jane@ex.com", "janepass123").await;
+        let mut r = json_post(
+            "/api/imap/list_folders",
+            json!({ "mailboxId": mark_box }),
+        );
+        r.headers_mut().insert("cookie", jane.parse().unwrap());
+        let (status, body, _) = send(&app, r).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(body["error"].as_str().unwrap().contains("Not authorized"));
+    }
+
+    #[tokio::test]
+    async fn profile_per_user_overrides_global_field_by_field() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let mark_id = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+
+        // Global: name + signature.
+        let mut g = Request::builder()
+            .method("PUT")
+            .uri("/api/admin/profile/global")
+            .header("content-type", "application/json")
+            .header("cookie", &admin)
+            .body(Body::from(
+                json!({ "displayName": "UK Brewery Tours", "signatureHtml": "<p>global sig</p>" })
+                    .to_string(),
+            ))
+            .unwrap();
+        g.headers_mut(); // no-op, keep explicit
+        let (s, _, _) = send(&app, g).await;
+        assert_eq!(s, StatusCode::OK);
+
+        // Per-user: override only the display name (signature left null).
+        let u = Request::builder()
+            .method("PUT")
+            .uri(&format!("/api/admin/profile/user/{mark_id}"))
+            .header("content-type", "application/json")
+            .header("cookie", &admin)
+            .body(Body::from(
+                json!({ "displayName": "Mark", "signatureHtml": null }).to_string(),
+            ))
+            .unwrap();
+        send(&app, u).await;
+
+        // Mark's resolved profile: name from per-user, signature from global.
+        let mark = login(&app, "mark@ex.com", "markpass123").await;
+        let (_, body, _) = send(
+            &app,
+            Request::builder()
+                .uri("/api/profile")
+                .header("cookie", &mark)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(body["displayName"], "Mark");
+        assert_eq!(body["signatureHtml"], "<p>global sig</p>");
+    }
+
+    #[tokio::test]
+    async fn member_cannot_set_profile() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let mark = login(&app, "mark@ex.com", "markpass123").await;
+
+        let r = Request::builder()
+            .method("PUT")
+            .uri("/api/admin/profile/global")
+            .header("content-type", "application/json")
+            .header("cookie", &mark)
+            .body(Body::from(json!({ "displayName": "hacked" }).to_string()))
+            .unwrap();
+        let (status, _, _) = send(&app, r).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 }

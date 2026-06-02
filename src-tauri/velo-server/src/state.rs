@@ -68,6 +68,7 @@ impl AppState {
     pub async fn init(control_path: &str, data_dir: PathBuf) -> Self {
         let mut conn = open_sqlite(control_path).await;
         control_migrate(&mut conn).await;
+        crate::profile::migrate(&mut conn).await;
 
         let state = AppState {
             control: Arc::new(Mutex::new(conn)),

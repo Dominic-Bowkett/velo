@@ -10,6 +10,12 @@ import {
   type Mailbox,
   type NewMailbox,
 } from "../../services/auth/authService";
+import {
+  fetchAdminProfiles,
+  setGlobalProfile,
+  setUserProfile,
+  type AdminProfileView,
+} from "../../services/web/profileService";
 
 /**
  * Admin-only management panel: create users (admin/member) and provision their
@@ -49,6 +55,123 @@ export function AdminPanel() {
         mailboxes={mailboxes}
         onChange={refresh}
       />
+      <ProfileSection />
+    </div>
+  );
+}
+
+function ProfileSection() {
+  const [data, setData] = useState<AdminProfileView | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setData(await fetchAdminProfiles());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (!data) return null;
+
+  const note = (msg: string) => {
+    setStatus(msg);
+    setTimeout(() => setStatus(null), 2000);
+  };
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-sm font-medium text-text-primary uppercase tracking-wide">
+        Display name &amp; signature
+      </h2>
+      <p className="text-xs text-text-tertiary">
+        Set a global default, or override per user. Users cannot change these.
+        Leave a field blank to fall back to the global value.
+      </p>
+
+      <ProfileEditor
+        label="Global default"
+        initialName={data.global.displayName ?? ""}
+        initialSignature={data.global.signatureHtml ?? ""}
+        onSave={async (name, sig) => {
+          await setGlobalProfile({
+            displayName: name || null,
+            signatureHtml: sig || null,
+          });
+          note("Saved global profile");
+          load();
+        }}
+      />
+
+      {data.perUser.map((u) => (
+        <ProfileEditor
+          key={u.userId}
+          label={u.email}
+          initialName={u.displayName ?? ""}
+          initialSignature={u.signatureHtml ?? ""}
+          onSave={async (name, sig) => {
+            await setUserProfile(u.userId, {
+              displayName: name || null,
+              signatureHtml: sig || null,
+            });
+            note(`Saved profile for ${u.email}`);
+            load();
+          }}
+        />
+      ))}
+      {status && <div className="text-xs text-success">{status}</div>}
+    </section>
+  );
+}
+
+function ProfileEditor({
+  label,
+  initialName,
+  initialSignature,
+  onSave,
+}: {
+  label: string;
+  initialName: string;
+  initialSignature: string;
+  onSave: (name: string, signatureHtml: string) => Promise<void>;
+}) {
+  const [name, setName] = useState(initialName);
+  const [sig, setSig] = useState(initialSignature);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-border-secondary p-3 space-y-2">
+      <div className="text-xs font-medium text-text-secondary">{label}</div>
+      <input
+        placeholder="Display name (e.g. UK Brewery Tours)"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="w-full px-2 py-1.5 rounded bg-bg-secondary border border-border-secondary text-sm text-text-primary outline-none"
+      />
+      <textarea
+        placeholder="Signature HTML"
+        value={sig}
+        onChange={(e) => setSig(e.target.value)}
+        rows={3}
+        className="w-full px-2 py-1.5 rounded bg-bg-secondary border border-border-secondary text-sm text-text-primary outline-none font-mono"
+      />
+      <button
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onSave(name, sig);
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="px-3 py-1.5 rounded bg-accent text-white text-sm hover:bg-accent-hover disabled:opacity-50"
+      >
+        Save
+      </button>
     </div>
   );
 }

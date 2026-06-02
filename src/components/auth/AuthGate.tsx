@@ -1,7 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import { isWeb } from "../../services/transport";
 import { fetchMe } from "../../services/auth/authService";
+import { fetchMyProfile } from "../../services/web/profileService";
 import { useAuthStore } from "../../stores/authStore";
+import { useProfileStore } from "../../stores/profileStore";
 import { LoginScreen } from "./LoginScreen";
 
 /**
@@ -21,10 +23,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isWeb()) return;
     let cancelled = false;
-    fetchMe().then((u) => {
+    fetchMe().then(async (u) => {
       if (cancelled) return;
       setUser(u);
-      setChecked(true);
+      // Load the admin-controlled profile (display name + signature) once signed in.
+      if (u) {
+        try {
+          const p = await fetchMyProfile();
+          useProfileStore.getState().setProfile(p);
+        } catch {
+          /* profile is optional; ignore */
+        }
+      }
+      if (!cancelled) setChecked(true);
     });
     return () => {
       cancelled = true;

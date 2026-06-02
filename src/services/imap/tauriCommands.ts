@@ -10,6 +10,10 @@ export interface ImapConfig {
   password: string; // plaintext password or OAuth2 access token
   auth_method: 'password' | 'oauth2';
   accept_invalid_certs?: boolean;
+  /** Web: server-provisioned mailbox id. When set, the HTTP transport sends it
+   *  to the server (which resolves credentials), and these credential fields are
+   *  empty. Ignored on desktop. */
+  mailboxId?: string;
 }
 
 export interface ImapFolder {
@@ -111,6 +115,8 @@ export interface SmtpConfig {
   password: string;
   auth_method: 'password' | 'oauth2';
   accept_invalid_certs?: boolean;
+  /** Web: server-provisioned mailbox id (see ImapConfig.mailboxId). */
+  mailboxId?: string;
 }
 
 export interface SmtpSendResult {

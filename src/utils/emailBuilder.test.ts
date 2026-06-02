@@ -26,6 +26,32 @@ describe("emailBuilder", () => {
     expect(decoded).toContain("<p>Hello World</p>");
   });
 
+  it("formats the From header with a display name when provided", () => {
+    const raw = buildRawEmail({
+      from: "info@ukbrewerytours.com",
+      fromName: "UK Brewery Tours",
+      to: ["recipient@example.com"],
+      subject: "Hi",
+      htmlBody: "<p>Hi</p>",
+    });
+    const decoded = decodeBase64Url(raw);
+    expect(decoded).toContain('From: "UK Brewery Tours" <info@ukbrewerytours.com>');
+  });
+
+  it("falls back to a bare address when no display name is given", () => {
+    const raw = buildRawEmail({
+      from: "info@ukbrewerytours.com",
+      to: ["recipient@example.com"],
+      subject: "Hi",
+      htmlBody: "<p>Hi</p>",
+    });
+    const decoded = decodeBase64Url(raw);
+    expect(decoded).toContain("From: info@ukbrewerytours.com");
+    // The From line itself has no quoted display name.
+    const fromLine = decoded.split("\r\n").find((l) => l.startsWith("From:"));
+    expect(fromLine).toBe("From: info@ukbrewerytours.com");
+  });
+
   it("includes Date and Message-ID headers", () => {
     const raw = buildRawEmail({
       from: "sender@example.com",

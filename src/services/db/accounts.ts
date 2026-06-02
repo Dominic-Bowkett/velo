@@ -34,6 +34,9 @@ export interface DbAccount {
   caldav_home_url: string | null;
   calendar_provider: string | null;
   accept_invalid_certs: number;
+  /** Server-provisioned mailbox id (web). When set, IMAP/SMTP ops send this
+   *  instead of credentials and the server resolves/authorizes it. */
+  mailbox_id: string | null;
 }
 
 async function decryptAccountTokens(account: DbAccount): Promise<DbAccount> {

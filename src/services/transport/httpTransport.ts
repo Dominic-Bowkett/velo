@@ -14,6 +14,19 @@ import { COMMAND_ROUTES } from "./commandRoutes";
 /** Base URL for the API. Empty string = same origin (server serves the SPA). */
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
+/**
+ * IMAP/SMTP commands carry a `config` object. On the web, that config has a
+ * `mailboxId` instead of real credentials — lift it to the request root where
+ * the server expects it, so the server resolves and authorizes the mailbox.
+ */
+function hoistMailboxId(args: Record<string, unknown>): Record<string, unknown> {
+  const config = args["config"] as { mailboxId?: string } | undefined;
+  if (config && typeof config.mailboxId === "string") {
+    return { ...args, mailboxId: config.mailboxId };
+  }
+  return args;
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -47,7 +60,7 @@ export const httpTransport: Transport = {
         new Error(`Command "${command}" is not available in the web app`),
       );
     }
-    return postJson<T>(route, args ?? {});
+    return postJson<T>(route, hoistMailboxId(args ?? {}));
   },
 
   select<T>(query: string, params: unknown[] = []): Promise<T> {

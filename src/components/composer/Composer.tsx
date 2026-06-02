@@ -24,6 +24,8 @@ import { upsertContact } from "@/services/db/contacts";
 import { getSetting } from "@/services/db/settings";
 import { insertScheduledEmail } from "@/services/db/scheduledEmails";
 import { getDefaultSignature } from "@/services/db/signatures";
+import { useProfileStore } from "@/stores/profileStore";
+import { isWeb } from "@/services/transport";
 import { getAliasesForAccount, mapDbAlias, type SendAsAlias } from "@/services/db/sendAsAliases";
 import { resolveFromAddress } from "@/utils/resolveFromAddress";
 import { startAutoSave, stopAutoSave } from "@/services/composer/draftAutoSave";
@@ -153,8 +155,13 @@ export function Composer() {
       if (cancelled) return;
       const store = useComposerStore.getState();
 
-      // Signature
-      if (sig) {
+      // Signature. On the web the admin-controlled signature wins and members
+      // cannot change it; otherwise fall back to the account's default.
+      const serverSig = useProfileStore.getState().signatureHtml;
+      if (isWeb() && serverSig) {
+        store.setSignatureHtml(serverSig);
+        store.setSignatureId(null);
+      } else if (sig) {
         store.setSignatureHtml(sig.body_html);
         store.setSignatureId(sig.id);
       }
@@ -243,8 +250,11 @@ export function Composer() {
 
     const html = getFullHtml();
     const senderEmail = state.fromEmail ?? activeAccount.email;
+    // Web: the admin-controlled display name is applied to the From header.
+    const fromName = useProfileStore.getState().displayName ?? undefined;
     const raw = buildRawEmail({
       from: senderEmail,
+      fromName,
       to: state.to,
       cc: state.cc.length > 0 ? state.cc : undefined,
       bcc: state.bcc.length > 0 ? state.bcc : undefined,
@@ -563,7 +573,8 @@ export function Composer() {
                 {savedLabel}
               </span>
             )}
-            <SignatureSelector />
+            {/* Signatures are admin-controlled on the web — members can't pick. */}
+            {!isWeb() && <SignatureSelector />}
             <TemplatePicker editor={editor} />
           </div>
           <div className="flex items-center gap-2">

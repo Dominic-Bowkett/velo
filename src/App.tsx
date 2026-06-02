@@ -12,6 +12,8 @@ import { useAccountStore } from "./stores/accountStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { runMigrations } from "./services/db/migrations";
 import { getAllAccounts } from "./services/db/accounts";
+import { isWeb } from "./services/transport";
+import { syncProvisionedMailboxes } from "./services/web/mailboxBootstrap";
 import { getSetting } from "./services/db/settings";
 import {
   startBackgroundSync,
@@ -294,6 +296,16 @@ export default function App() {
 
         // Load custom keyboard shortcuts
         await useShortcutStore.getState().loadKeyMap();
+
+        // Web: materialise the server-provisioned mailboxes as local accounts
+        // before reading them, so sync/compose work through the mailbox_id.
+        if (isWeb()) {
+          try {
+            await syncProvisionedMailboxes();
+          } catch (err) {
+            console.error("Failed to sync provisioned mailboxes:", err);
+          }
+        }
 
         const dbAccounts = await getAllAccounts();
         const mapped = dbAccounts.map((a) => ({
