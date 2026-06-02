@@ -100,6 +100,9 @@ async fn build_transport(
         ),
     }
 
+    // Fail fast instead of hanging ~70s when a host silently drops SMTP packets.
+    let connect_timeout = Some(std::time::Duration::from_secs(15));
+
     let transport = match config.security.as_str() {
         "tls" => {
             // Implicit TLS (typically port 465). TLS params use the real
@@ -107,6 +110,7 @@ async fn build_transport(
             AsyncSmtpTransport::<Tokio1Executor>::relay(&connect_host)
                 .map_err(|e| format!("SMTP relay error: {}", e))?
                 .port(config.port)
+                .timeout(connect_timeout)
                 .credentials(credentials)
                 .authentication(auth_mechanisms)
                 .tls(Tls::Wrapper(tls_params(config)?))
@@ -117,6 +121,7 @@ async fn build_transport(
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&connect_host)
                 .map_err(|e| format!("SMTP STARTTLS error: {}", e))?
                 .port(config.port)
+                .timeout(connect_timeout)
                 .credentials(credentials)
                 .authentication(auth_mechanisms)
                 .tls(Tls::Required(tls_params(config)?))
@@ -126,6 +131,7 @@ async fn build_transport(
             // Plain / no encryption (typically port 25) — not recommended
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&connect_host)
                 .port(config.port)
+                .timeout(connect_timeout)
                 .credentials(credentials)
                 .authentication(auth_mechanisms)
                 .build()
