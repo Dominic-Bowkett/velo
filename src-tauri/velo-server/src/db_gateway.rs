@@ -69,6 +69,9 @@ fn bind_params(
 }
 
 fn err_response(msg: String) -> Response {
+    // Log gateway errors server-side so they appear in the host's logs, not only
+    // in the HTTP response body the browser receives.
+    tracing::warn!("db gateway error: {msg}");
     (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
 }
 
@@ -85,7 +88,10 @@ async fn select(
             let out: Vec<JsonValue> = rows.iter().map(row_to_json).collect();
             Json(out).into_response()
         }
-        Err(e) => err_response(format!("select failed: {e}")),
+        Err(e) => {
+            let snippet: String = req.query.chars().take(120).collect();
+            err_response(format!("select failed: {e} | query: {snippet}"))
+        }
     }
 }
 
@@ -103,7 +109,10 @@ async fn execute(
             "lastInsertId": result.last_insert_rowid(),
         }))
         .into_response(),
-        Err(e) => err_response(format!("execute failed: {e}")),
+        Err(e) => {
+            let snippet: String = req.query.chars().take(120).collect();
+            err_response(format!("execute failed: {e} | query: {snippet}"))
+        }
     }
 }
 
