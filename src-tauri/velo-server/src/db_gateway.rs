@@ -102,6 +102,19 @@ async fn execute(
 ) -> Response {
     let conn: Conn = state.user_db(&user.id).await;
     let mut conn = conn.lock().await;
+
+    // Recover from a connection left mid-transaction. The frontend runs
+    // BEGIN / ... / COMMIT as separate HTTP calls on one shared connection; if a
+    // page was closed/refreshed between BEGIN and COMMIT, the connection stays
+    // stuck and every later BEGIN fails with "cannot start a transaction within
+    // a transaction". Before a BEGIN, roll back any dangling transaction so the
+    // new one can start cleanly.
+    let trimmed = req.query.trim_start();
+    if trimmed.len() >= 5 && trimmed[..5].eq_ignore_ascii_case("BEGIN") {
+        use sqlx::Executor;
+        let _ = conn.execute("ROLLBACK").await; // no-op if not in a transaction
+    }
+
     let q = bind_params(&req.query, req.params);
     match q.execute(&mut *conn).await {
         Ok(result) => Json(json!({

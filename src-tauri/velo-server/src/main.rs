@@ -337,6 +337,37 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "FTS5 + trigram must be available");
     }
 
+    #[tokio::test]
+    async fn sql_gateway_recovers_from_dangling_transaction() {
+        // Simulate a page closed between BEGIN and COMMIT: a BEGIN with no
+        // matching COMMIT leaves the shared connection mid-transaction. A later
+        // BEGIN must still succeed (the gateway rolls back the dangling one)
+        // rather than failing with "cannot start a transaction within a
+        // transaction".
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+
+        let begin = |cookie: &str| {
+            let mut r = json_post("/api/db/execute", json!({ "query": "BEGIN TRANSACTION", "params": [] }));
+            r.headers_mut().insert("cookie", cookie.parse().unwrap());
+            r
+        };
+
+        // First BEGIN, never committed → connection left in a transaction.
+        let (s1, _, _) = send(&app, begin(&admin)).await;
+        assert_eq!(s1, StatusCode::OK);
+
+        // Second BEGIN previously 502'd; now it must recover and succeed.
+        let (s2, _, _) = send(&app, begin(&admin)).await;
+        assert_eq!(s2, StatusCode::OK, "gateway must recover from a dangling transaction");
+
+        // And normal writes work afterwards.
+        let mut commit = json_post("/api/db/execute", json!({ "query": "COMMIT", "params": [] }));
+        commit.headers_mut().insert("cookie", admin.parse().unwrap());
+        let (s3, _, _) = send(&app, commit).await;
+        assert_eq!(s3, StatusCode::OK);
+    }
+
     /// Helper: admin creates a member and returns their user id.
     async fn create_member(app: &axum::Router, admin: &str, email: &str, pw: &str) -> String {
         let mut r = json_post(
