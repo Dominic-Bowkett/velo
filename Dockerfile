@@ -36,8 +36,9 @@ COPY --from=web /app/dist ./dist
 COPY --from=server /build/src-tauri/target/release/velo-server ./velo-server
 
 # Persisted data lives here — mount a volume at /data to keep it across restarts.
-ENV VELO_BIND=0.0.0.0:8080 \
-    VELO_STATIC_DIR=/app/dist \
+# VELO_BIND is intentionally unset so hosts that inject $PORT (Railway/Render)
+# are honoured; the server falls back to 0.0.0.0:8080 when neither is set.
+ENV VELO_STATIC_DIR=/app/dist \
     VELO_CONTROL_DB=/data/control.db \
     VELO_DATA_DIR=/data
 VOLUME ["/data"]

@@ -57,8 +57,16 @@ async fn main() {
 
     let app = build_app(state);
 
-    let bind = std::env::var("VELO_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    let addr: SocketAddr = bind.parse().expect("VELO_BIND must be a valid address");
+    // Bind address resolution, in priority order:
+    //   1. VELO_BIND (explicit host:port)
+    //   2. PORT (set by Railway/Render/Heroku-style hosts) → 0.0.0.0:$PORT
+    //   3. default 127.0.0.1:8080
+    let bind = std::env::var("VELO_BIND").unwrap_or_else(|_| {
+        std::env::var("PORT")
+            .map(|p| format!("0.0.0.0:{p}"))
+            .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+    });
+    let addr: SocketAddr = bind.parse().expect("bind address must be valid host:port");
 
     tracing::info!("velo-server listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr)
