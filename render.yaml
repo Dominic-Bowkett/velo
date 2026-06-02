@@ -1,0 +1,23 @@
+# Render.com blueprint — deploy velo-server straight from this repo.
+# In Render: New → Blueprint → connect this GitHub repo. Render reads this file,
+# builds the Dockerfile, and creates the service + persistent disk.
+#
+# After the first deploy, set VELO_ADMIN_EMAIL / VELO_ADMIN_PASSWORD in the
+# dashboard (Environment) to create your admin login, then remove them.
+services:
+  - type: web
+    name: velo
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    disk:
+      name: velo-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: VELO_PUBLIC_URL
+        sync: false # set this to your Render URL, e.g. https://velo.onrender.com
+      - key: VELO_ADMIN_EMAIL
+        sync: false # set on first deploy to create the admin, then clear
+      - key: VELO_ADMIN_PASSWORD
+        sync: false # set on first deploy, then clear
