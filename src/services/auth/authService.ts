@@ -79,3 +79,53 @@ export function setUserPassword(id: string, password: string): Promise<void> {
     () => undefined,
   );
 }
+
+// ---- mailbox provisioning (admin) + listing (any user) ----
+
+export interface Mailbox {
+  id: string;
+  ownerUserId: string;
+  email: string;
+  displayName: string | null;
+  imapHost: string;
+  imapPort: number;
+  imapSecurity: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: string;
+  username: string | null;
+  acceptInvalidCerts: boolean;
+}
+
+export interface NewMailbox {
+  ownerUserId: string;
+  email: string;
+  displayName?: string;
+  imapHost: string;
+  imapPort: number;
+  imapSecurity: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: string;
+  username?: string;
+  password: string;
+  acceptInvalidCerts?: boolean;
+}
+
+/** Admin: all provisioned mailboxes. */
+export function listAllMailboxes(): Promise<Mailbox[]> {
+  return req<Mailbox[]>("/api/admin/mailboxes", "GET");
+}
+
+/** Current user's mailboxes (admin sees all). Never includes passwords. */
+export function listMyMailboxes(): Promise<Mailbox[]> {
+  return req<Mailbox[]>("/api/mailboxes", "GET");
+}
+
+export function createMailbox(input: NewMailbox): Promise<{ id: string }> {
+  return req<{ id: string }>("/api/admin/mailboxes", "POST", input);
+}
+
+export function deleteMailbox(id: string): Promise<void> {
+  return req(`/api/admin/mailboxes/${id}`, "DELETE").then(() => undefined);
+}

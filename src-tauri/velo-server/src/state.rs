@@ -153,6 +153,32 @@ async fn control_migrate(conn: &mut sqlx::SqliteConnection) {
     .execute(&mut *conn)
     .await
     .expect("create sessions table failed");
+
+    // Provisioned IMAP/SMTP mailboxes. Credentials live here (server-only),
+    // encrypted with the server secret key. A mailbox is owned by one user; the
+    // browser only ever references it by id. The admin manages these; members
+    // can use but not edit them.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mailboxes (
+            id TEXT PRIMARY KEY,
+            owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            email TEXT NOT NULL,
+            display_name TEXT,
+            imap_host TEXT NOT NULL,
+            imap_port INTEGER NOT NULL,
+            imap_security TEXT NOT NULL,
+            smtp_host TEXT NOT NULL,
+            smtp_port INTEGER NOT NULL,
+            smtp_security TEXT NOT NULL,
+            username TEXT,
+            password_enc TEXT NOT NULL,
+            accept_invalid_certs INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        )",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("create mailboxes table failed");
 }
 
 // ---------- password hashing ----------

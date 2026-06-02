@@ -1,40 +1,28 @@
-//! HTTP handlers mirroring the desktop Tauri IMAP/SMTP/OAuth commands.
+//! HTTP handlers mirroring the desktop Tauri IMAP/SMTP commands.
 //!
-//! Each route accepts a JSON body matching the parameters of the corresponding
-//! `velo_core::ops` function and returns its result as JSON. Errors from core
-//! (`Result<_, String>`) are surfaced as HTTP 502 with a JSON `{ "error": ... }`
-//! body so the frontend's `httpTransport` can treat them like the rejected
-//! promises that `invoke()` produced on the desktop.
-//!
-//! NOTE: in this phase the IMAP/SMTP `config` (which carries credentials) is
-//! still supplied in the request body, mirroring the desktop contract. Phase 3
-//! moves credential resolution server-side (by accountId) so the browser never
-//! sends secrets; these handlers will then look the config up instead.
+//! **Credential model (web security):** the browser sends a `mailboxId` instead
+//! of real credentials. The server resolves the IMAP/SMTP config from the
+//! control DB (decrypting the password with the server key) and enforces that
+//! the caller owns the mailbox. A raw `config` is still accepted as a fallback
+//! (used by tests and for parity with the desktop command shape), but the web
+//! frontend always sends `mailboxId` so secrets never leave the server.
 
 use axum::{
-    extract::Json,
+    extract::{Json, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
-    Router,
+    Extension, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use velo_core::ops;
-use velo_core::{
-    DeltaCheckRequest, ImapConfig, SmtpConfig,
-};
+use velo_core::{DeltaCheckRequest, ImapConfig, SmtpConfig};
 
-/// Convert a `Result<T, String>` from core into an HTTP response: `T` as JSON on
-/// success, or 502 + `{ "error": msg }` on failure.
-fn core_result<T: Serialize>(result: Result<T, String>) -> Response {
-    match result {
-        Ok(value) => Json(value).into_response(),
-        Err(msg) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response(),
-    }
-}
+use crate::mailboxes;
+use crate::state::{AppState, User};
 
-pub fn router() -> Router {
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/imap/test_connection", post(imap_test_connection))
         .route("/imap/list_folders", post(imap_list_folders))
@@ -55,31 +43,79 @@ pub fn router() -> Router {
         .route("/imap/delta_check", post(imap_delta_check))
         .route("/smtp/send", post(smtp_send_email))
         .route("/smtp/test_connection", post(smtp_test_connection))
+        .with_state(state)
 }
 
-// ---------- IMAP request bodies ----------
+fn ok<T: Serialize>(result: Result<T, String>) -> Response {
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(msg) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response(),
+    }
+}
+
+fn bad(msg: String) -> Response {
+    (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
+}
+
+/// Pick the IMAP config to use: resolve from `mailboxId` (server-side, ownership
+/// enforced) when present, else fall back to a directly-supplied `config`.
+async fn imap_cfg(
+    state: &AppState,
+    user: &User,
+    mailbox_id: &Option<String>,
+    config: Option<ImapConfig>,
+) -> Result<ImapConfig, String> {
+    match mailbox_id {
+        Some(id) => mailboxes::resolve_imap(state, user, id).await,
+        None => config.ok_or_else(|| "Missing mailboxId or config".to_string()),
+    }
+}
+
+async fn smtp_cfg(
+    state: &AppState,
+    user: &User,
+    mailbox_id: &Option<String>,
+    config: Option<SmtpConfig>,
+) -> Result<SmtpConfig, String> {
+    match mailbox_id {
+        Some(id) => mailboxes::resolve_smtp(state, user, id).await,
+        None => config.ok_or_else(|| "Missing mailboxId or config".to_string()),
+    }
+}
+
+// ---------- request bodies ----------
+// Every IMAP body carries an optional `mailboxId` (preferred) and optional
+// `config` (fallback). camelCase to match the frontend.
 
 #[derive(Deserialize)]
 struct ConfigOnly {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
 }
 
 #[derive(Deserialize)]
 struct FolderReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
 }
 
 #[derive(Deserialize)]
 struct FetchMessagesReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     uids: Vec<u32>,
 }
 
 #[derive(Deserialize)]
 struct NewUidsReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     #[serde(rename = "sinceUid")]
     since_uid: u32,
@@ -87,14 +123,18 @@ struct NewUidsReq {
 
 #[derive(Deserialize)]
 struct MessageBodyReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     uid: u32,
 }
 
 #[derive(Deserialize)]
 struct SetFlagsReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     uids: Vec<u32>,
     flags: Vec<String>,
@@ -103,7 +143,9 @@ struct SetFlagsReq {
 
 #[derive(Deserialize)]
 struct MoveReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     uids: Vec<u32>,
     destination: String,
@@ -111,14 +153,18 @@ struct MoveReq {
 
 #[derive(Deserialize)]
 struct DeleteReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     uids: Vec<u32>,
 }
 
 #[derive(Deserialize)]
 struct AttachmentReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     uid: u32,
     #[serde(rename = "partId")]
@@ -127,7 +173,9 @@ struct AttachmentReq {
 
 #[derive(Deserialize)]
 struct AppendReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     flags: Option<String>,
     #[serde(rename = "rawMessage")]
@@ -136,7 +184,9 @@ struct AppendReq {
 
 #[derive(Deserialize)]
 struct SearchFolderReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     #[serde(rename = "sinceDate")]
     since_date: Option<String>,
@@ -144,7 +194,9 @@ struct SearchFolderReq {
 
 #[derive(Deserialize)]
 struct SyncFolderReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     #[serde(rename = "batchSize")]
     batch_size: u32,
@@ -154,7 +206,9 @@ struct SyncFolderReq {
 
 #[derive(Deserialize)]
 struct RawDiagnosticReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folder: String,
     #[serde(rename = "uidRange")]
     uid_range: String,
@@ -162,102 +216,237 @@ struct RawDiagnosticReq {
 
 #[derive(Deserialize)]
 struct DeltaCheckReq {
-    config: ImapConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<ImapConfig>,
     folders: Vec<DeltaCheckRequest>,
 }
 
-// ---------- SMTP request bodies ----------
-
 #[derive(Deserialize)]
 struct SmtpSendReq {
-    config: SmtpConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<SmtpConfig>,
     #[serde(rename = "rawEmail")]
     raw_email: String,
 }
 
 #[derive(Deserialize)]
 struct SmtpConfigOnly {
-    config: SmtpConfig,
+    #[serde(rename = "mailboxId", default)]
+    mailbox_id: Option<String>,
+    config: Option<SmtpConfig>,
 }
 
 // ---------- IMAP handlers ----------
 
-async fn imap_test_connection(Json(req): Json<ConfigOnly>) -> Response {
-    core_result(ops::imap_test_connection(req.config).await)
+async fn imap_test_connection(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<ConfigOnly>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_test_connection(c).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_list_folders(Json(req): Json<ConfigOnly>) -> Response {
-    core_result(ops::imap_list_folders(req.config).await)
+async fn imap_list_folders(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<ConfigOnly>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_list_folders(c).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_fetch_messages(Json(req): Json<FetchMessagesReq>) -> Response {
-    core_result(ops::imap_fetch_messages(req.config, req.folder, req.uids).await)
+async fn imap_fetch_messages(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<FetchMessagesReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_fetch_messages(c, req.folder, req.uids).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_fetch_new_uids(Json(req): Json<NewUidsReq>) -> Response {
-    core_result(ops::imap_fetch_new_uids(req.config, req.folder, req.since_uid).await)
+async fn imap_fetch_new_uids(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<NewUidsReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_fetch_new_uids(c, req.folder, req.since_uid).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_search_all_uids(Json(req): Json<FolderReq>) -> Response {
-    core_result(ops::imap_search_all_uids(req.config, req.folder).await)
+async fn imap_search_all_uids(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<FolderReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_search_all_uids(c, req.folder).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_fetch_message_body(Json(req): Json<MessageBodyReq>) -> Response {
-    core_result(ops::imap_fetch_message_body(req.config, req.folder, req.uid).await)
+async fn imap_fetch_message_body(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<MessageBodyReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_fetch_message_body(c, req.folder, req.uid).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_fetch_raw_message(Json(req): Json<MessageBodyReq>) -> Response {
-    core_result(ops::imap_fetch_raw_message(req.config, req.folder, req.uid).await)
+async fn imap_fetch_raw_message(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<MessageBodyReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_fetch_raw_message(c, req.folder, req.uid).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_set_flags(Json(req): Json<SetFlagsReq>) -> Response {
-    core_result(ops::imap_set_flags(req.config, req.folder, req.uids, req.flags, req.add).await)
+async fn imap_set_flags(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SetFlagsReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_set_flags(c, req.folder, req.uids, req.flags, req.add).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_move_messages(Json(req): Json<MoveReq>) -> Response {
-    core_result(ops::imap_move_messages(req.config, req.folder, req.uids, req.destination).await)
+async fn imap_move_messages(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<MoveReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_move_messages(c, req.folder, req.uids, req.destination).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_delete_messages(Json(req): Json<DeleteReq>) -> Response {
-    core_result(ops::imap_delete_messages(req.config, req.folder, req.uids).await)
+async fn imap_delete_messages(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<DeleteReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_delete_messages(c, req.folder, req.uids).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_get_folder_status(Json(req): Json<FolderReq>) -> Response {
-    core_result(ops::imap_get_folder_status(req.config, req.folder).await)
+async fn imap_get_folder_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<FolderReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_get_folder_status(c, req.folder).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_fetch_attachment(Json(req): Json<AttachmentReq>) -> Response {
-    core_result(ops::imap_fetch_attachment(req.config, req.folder, req.uid, req.part_id).await)
+async fn imap_fetch_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<AttachmentReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_fetch_attachment(c, req.folder, req.uid, req.part_id).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_append_message(Json(req): Json<AppendReq>) -> Response {
-    core_result(ops::imap_append_message(req.config, req.folder, req.flags, req.raw_message).await)
+async fn imap_append_message(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<AppendReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_append_message(c, req.folder, req.flags, req.raw_message).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_search_folder(Json(req): Json<SearchFolderReq>) -> Response {
-    core_result(ops::imap_search_folder(req.config, req.folder, req.since_date).await)
+async fn imap_search_folder(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SearchFolderReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_search_folder(c, req.folder, req.since_date).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_sync_folder(Json(req): Json<SyncFolderReq>) -> Response {
-    core_result(
-        ops::imap_sync_folder(req.config, req.folder, req.batch_size, req.since_date).await,
-    )
+async fn imap_sync_folder(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SyncFolderReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_sync_folder(c, req.folder, req.batch_size, req.since_date).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_raw_fetch_diagnostic(Json(req): Json<RawDiagnosticReq>) -> Response {
-    core_result(ops::imap_raw_fetch_diagnostic(req.config, req.folder, req.uid_range).await)
+async fn imap_raw_fetch_diagnostic(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<RawDiagnosticReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_raw_fetch_diagnostic(c, req.folder, req.uid_range).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn imap_delta_check(Json(req): Json<DeltaCheckReq>) -> Response {
-    core_result(ops::imap_delta_check(req.config, req.folders).await)
+async fn imap_delta_check(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<DeltaCheckReq>,
+) -> Response {
+    match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::imap_delta_check(c, req.folders).await),
+        Err(e) => bad(e),
+    }
 }
 
 // ---------- SMTP handlers ----------
 
-async fn smtp_send_email(Json(req): Json<SmtpSendReq>) -> Response {
-    core_result(ops::smtp_send_email(req.config, req.raw_email).await)
+async fn smtp_send_email(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SmtpSendReq>,
+) -> Response {
+    match smtp_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::smtp_send_email(c, req.raw_email).await),
+        Err(e) => bad(e),
+    }
 }
 
-async fn smtp_test_connection(Json(req): Json<SmtpConfigOnly>) -> Response {
-    core_result(ops::smtp_test_connection(req.config).await)
+async fn smtp_test_connection(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SmtpConfigOnly>,
+) -> Response {
+    match smtp_cfg(&state, &user, &req.mailbox_id, req.config).await {
+        Ok(c) => ok(ops::smtp_test_connection(c).await),
+        Err(e) => bad(e),
+    }
 }

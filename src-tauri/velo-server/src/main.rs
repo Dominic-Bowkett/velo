@@ -17,7 +17,9 @@
 mod auth;
 mod db_gateway;
 mod email_api;
+mod mailboxes;
 mod oauth_api;
+mod server_crypto;
 mod state;
 
 use axum::{routing::get, Router};
@@ -41,6 +43,11 @@ async fn main() {
     let data_dir = PathBuf::from(std::env::var("VELO_DATA_DIR").unwrap_or_else(|_| "data".into()));
     std::fs::create_dir_all(&data_dir).expect("failed to create VELO_DATA_DIR");
 
+    // Server secret key (for encrypting stored mailbox passwords) lives next to
+    // the control DB, or comes from VELO_SECRET_KEY.
+    let key_file = data_dir.join("velo-secret.key");
+    server_crypto::init_key(&key_file);
+
     let state = AppState::init(&control_db, data_dir).await;
     let app = build_app(state);
 
@@ -57,14 +64,24 @@ async fn main() {
 /// Build the full application router. Separated from `main` so tests can drive
 /// it without binding a socket.
 fn build_app(state: AppState) -> Router {
-    // Protected API: email commands + SQL gateway require a signed-in user.
+    // Protected API (any signed-in user): email commands, SQL gateway, and the
+    // member "my mailboxes" list (passwords never included).
     let protected = Router::new()
-        .merge(email_api::router())
+        .merge(email_api::router(state.clone()))
         .nest("/oauth", oauth_api::router())
         .nest("/db", db_gateway::router(state.clone()))
+        .merge(mailboxes::member_router(state.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_user,
+        ));
+
+    // Admin-only API: provisioned mailbox management (create/list/delete).
+    let admin_mailboxes = Router::new()
+        .nest("/admin", mailboxes::admin_router(state.clone()))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_admin,
         ));
 
     // Public/self-scoped API: health + auth (login/logout/me) + admin user mgmt
@@ -72,6 +89,7 @@ fn build_app(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router(state.clone()))
+        .merge(admin_mailboxes)
         .merge(protected);
 
     let mut app = Router::new().nest("/api", api).layer(CorsLayer::permissive());
@@ -93,6 +111,7 @@ mod tests {
     use crate::state::AppState;
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
+    use base64::Engine;
     use serde_json::{json, Value};
     use std::path::PathBuf;
     use tower::ServiceExt;
@@ -103,6 +122,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("VELO_ADMIN_EMAIL", "admin@example.com");
         std::env::set_var("VELO_ADMIN_PASSWORD", "admin-pass-123");
+        // Fixed key so mailbox-password encryption works deterministically in tests.
+        std::env::set_var(
+            "VELO_SECRET_KEY",
+            base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+        );
+        crate::server_crypto::init_key(&dir.join("unused.key"));
         let control = dir.join("control.db");
         let state = AppState::init(control.to_str().unwrap(), dir.clone()).await;
         (build_app(state), dir)
@@ -288,5 +313,115 @@ mod tests {
         r.headers_mut().insert("cookie", admin.parse().unwrap());
         let (status, _, _) = send(&app, r).await;
         assert_eq!(status, StatusCode::OK, "FTS5 + trigram must be available");
+    }
+
+    /// Helper: admin creates a member and returns their user id.
+    async fn create_member(app: &axum::Router, admin: &str, email: &str, pw: &str) -> String {
+        let mut r = json_post(
+            "/api/admin/users",
+            json!({ "email": email, "password": pw, "role": "member" }),
+        );
+        r.headers_mut().insert("cookie", admin.parse().unwrap());
+        let (status, body, _) = send(app, r).await;
+        assert_eq!(status, StatusCode::OK);
+        body["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn admin_provisions_mailbox_password_never_exposed() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let mark_id = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+
+        // Admin creates Mark's mailbox.
+        let mut r = json_post(
+            "/api/admin/mailboxes",
+            json!({
+                "ownerUserId": mark_id, "email": "mark@ex.com",
+                "imapHost": "imap.ex.com", "imapPort": 993, "imapSecurity": "tls",
+                "smtpHost": "smtp.ex.com", "smtpPort": 465, "smtpSecurity": "tls",
+                "password": "super-secret-imap-pw"
+            }),
+        );
+        r.headers_mut().insert("cookie", admin.parse().unwrap());
+        let (status, _, _) = send(&app, r).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Member lists their mailboxes — config present, password absent.
+        let member = login(&app, "mark@ex.com", "markpass123").await;
+        let (status, body, _) = send(
+            &app,
+            Request::builder()
+                .uri("/api/mailboxes")
+                .header("cookie", &member)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let mb = &body[0];
+        assert_eq!(mb["email"], "mark@ex.com");
+        assert_eq!(mb["imapHost"], "imap.ex.com");
+        // Critically: no password / password_enc anywhere in the response.
+        let serialized = body.to_string();
+        assert!(!serialized.contains("super-secret-imap-pw"));
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("passwordEnc"));
+    }
+
+    #[tokio::test]
+    async fn member_cannot_provision_mailboxes() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let member = login(&app, "mark@ex.com", "markpass123").await;
+
+        let mut r = json_post(
+            "/api/admin/mailboxes",
+            json!({
+                "ownerUserId": "anyone", "email": "x@ex.com",
+                "imapHost": "h", "imapPort": 993, "imapSecurity": "tls",
+                "smtpHost": "h", "smtpPort": 465, "smtpSecurity": "tls", "password": "p"
+            }),
+        );
+        r.headers_mut().insert("cookie", member.parse().unwrap());
+        let (status, _, _) = send(&app, r).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn member_only_sees_own_mailboxes() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let mark_id = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let jane_id = create_member(&app, &admin, "jane@ex.com", "janepass123").await;
+
+        for (owner, email) in [(&mark_id, "mark@ex.com"), (&jane_id, "jane@ex.com")] {
+            let mut r = json_post(
+                "/api/admin/mailboxes",
+                json!({
+                    "ownerUserId": owner, "email": email,
+                    "imapHost": "imap.ex.com", "imapPort": 993, "imapSecurity": "tls",
+                    "smtpHost": "smtp.ex.com", "smtpPort": 465, "smtpSecurity": "tls",
+                    "password": "pw"
+                }),
+            );
+            r.headers_mut().insert("cookie", admin.parse().unwrap());
+            send(&app, r).await;
+        }
+
+        // Mark sees only his mailbox.
+        let mark = login(&app, "mark@ex.com", "markpass123").await;
+        let (_, body, _) = send(
+            &app,
+            Request::builder()
+                .uri("/api/mailboxes")
+                .header("cookie", &mark)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["email"], "mark@ex.com");
     }
 }
