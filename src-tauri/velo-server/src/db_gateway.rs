@@ -1,30 +1,31 @@
 //! SQL gateway — mirrors the Tauri SQL plugin's `select`/`execute` contract over
 //! HTTP so the frontend's `connection.ts` works unchanged on the web.
 //!
-//! Single-connection model: all SQL is serialized on ONE SQLite connection
-//! behind a mutex. This matches the desktop (the Tauri SQL plugin + the
-//! frontend's `withTransaction` mutex assume a single connection) and, crucially,
-//! makes multi-request transactions correct — `BEGIN`, the statements, and
+//! Per-user routing: each request runs against the *logged-in user's own*
+//! data DB (`data-{userId}.db`), resolved from the `User` placed in request
+//! extensions by the `require_user` middleware. Isolation is by file boundary —
+//! a member's SQL can only ever touch their own mailbox data.
+//!
+//! Single-connection model per user DB: all SQL for a given user is serialized
+//! on ONE connection behind a mutex. This matches the desktop (the Tauri SQL
+//! plugin + the frontend's `withTransaction` mutex assume a single connection)
+//! and makes multi-request transactions correct — `BEGIN`, the statements, and
 //! `COMMIT` arrive as separate HTTP calls but all run on the same connection.
 //!
-//! Placeholders are `$1, $2, …` exactly as the frontend already emits (the same
-//! form the Tauri plugin's sqlx-sqlite backend accepts), so query strings need
-//! no rewriting.
+//! Placeholders are `$1, $2, …` exactly as the frontend already emits.
 
 use axum::{
     extract::{Json, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
-    Router,
+    Extension, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value as JsonValue};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
-pub type DbState = Arc<Mutex<sqlx::SqliteConnection>>;
+use crate::state::{AppState, Conn, User};
 
 #[derive(Deserialize)]
 struct SqlReq {
@@ -33,11 +34,11 @@ struct SqlReq {
     params: Vec<JsonValue>,
 }
 
-pub fn router(db: DbState) -> Router {
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/select", post(select))
         .route("/execute", post(execute))
-        .with_state(db)
+        .with_state(state)
 }
 
 /// Build a sqlx query and bind JSON params positionally, mirroring how the
@@ -61,8 +62,6 @@ fn bind_params(
                 }
             }
             JsonValue::String(s) => q.bind(s),
-            // Arrays/objects are stored as their JSON text (the frontend already
-            // stringifies structured columns before binding).
             other => q.bind(other.to_string()),
         };
     }
@@ -73,8 +72,13 @@ fn err_response(msg: String) -> Response {
     (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
 }
 
-async fn select(State(db): State<DbState>, Json(req): Json<SqlReq>) -> Response {
-    let mut conn = db.lock().await;
+async fn select(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SqlReq>,
+) -> Response {
+    let conn: Conn = state.user_db(&user.id).await;
+    let mut conn = conn.lock().await;
     let q = bind_params(&req.query, req.params);
     match q.fetch_all(&mut *conn).await {
         Ok(rows) => {
@@ -85,8 +89,13 @@ async fn select(State(db): State<DbState>, Json(req): Json<SqlReq>) -> Response 
     }
 }
 
-async fn execute(State(db): State<DbState>, Json(req): Json<SqlReq>) -> Response {
-    let mut conn = db.lock().await;
+async fn execute(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Json(req): Json<SqlReq>,
+) -> Response {
+    let conn: Conn = state.user_db(&user.id).await;
+    let mut conn = conn.lock().await;
     let q = bind_params(&req.query, req.params);
     match q.execute(&mut *conn).await {
         Ok(result) => Json(json!({
@@ -141,8 +150,6 @@ fn value_to_json(row: &sqlx::sqlite::SqliteRow, i: usize) -> JsonValue {
             .map(|bytes| JsonValue::Array(bytes.into_iter().map(JsonValue::from).collect()))
             .unwrap_or(JsonValue::Null),
         _ => {
-            // Unknown/declared-less columns (e.g. COUNT(*), expressions): try
-            // integer, then float, then text.
             if let Ok(n) = row.try_get::<i64, _>(i) {
                 JsonValue::from(n)
             } else if let Ok(f) = row.try_get::<f64, _>(i) {
