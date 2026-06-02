@@ -1,0 +1,10 @@
+# Keep the Docker build context small and reproducible — let the image rebuild
+# everything from source rather than copying host build outputs.
+node_modules
+dist
+src-tauri/target
+**/target
+.git
+landing
+*.log
+.DS_Store
