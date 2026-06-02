@@ -8,6 +8,7 @@ import { useThreadStore, type Thread } from "@/stores/threadStore";
 import { useComposerStore } from "@/stores/composerStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { markThreadRead } from "@/services/emailActions";
+import { isWeb } from "@/services/transport";
 import { getSetting } from "@/services/db/settings";
 import { getAllowlistedSenders } from "@/services/db/imageAllowlist";
 import { VolumeX } from "lucide-react";
@@ -28,10 +29,17 @@ interface ThreadViewProps {
 }
 
 async function handlePopOut(thread: Thread) {
+  const url = `index.html?thread=${encodeURIComponent(thread.id)}&account=${encodeURIComponent(thread.accountId)}`;
+
+  // Web: open a normal browser tab/window — there is no Tauri window runtime.
+  if (isWeb()) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+
   try {
     const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     const windowLabel = `thread-${thread.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-    const url = `index.html?thread=${encodeURIComponent(thread.id)}&account=${encodeURIComponent(thread.accountId)}`;
 
     // Check if window already exists
     const existing = await WebviewWindow.getByLabel(windowLabel);

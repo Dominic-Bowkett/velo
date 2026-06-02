@@ -10,6 +10,7 @@ import { archiveThread, trashThread, permanentDeleteThread, markThreadRead, star
 import { deleteThread as deleteThreadFromDb, pinThread as pinThreadDb, unpinThread as unpinThreadDb, muteThread as muteThreadDb, unmuteThread as unmuteThreadDb } from "@/services/db/threads";
 import { deleteDraftsForThread } from "@/services/gmail/draftDeletion";
 import { getGmailClient } from "@/services/gmail/tokenManager";
+import { isWeb } from "@/services/transport";
 import { getMessagesForThread } from "@/services/db/messages";
 import { snoozeThread } from "@/services/snooze/snoozeManager";
 import { getEnabledQuickStepsForAccount, type DbQuickStep } from "@/services/db/quickSteps";
@@ -376,10 +377,14 @@ function ThreadMenu({
   };
 
   const handlePopOut = async () => {
+    const url = `index.html?thread=${encodeURIComponent(thread.id)}&account=${encodeURIComponent(thread.accountId)}`;
+    if (isWeb()) {
+      window.open(url, "_blank", "noopener");
+      return;
+    }
     try {
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const windowLabel = `thread-${thread.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-      const url = `index.html?thread=${encodeURIComponent(thread.id)}&account=${encodeURIComponent(thread.accountId)}`;
       const existing = await WebviewWindow.getByLabel(windowLabel);
       if (existing) {
         await existing.setFocus();

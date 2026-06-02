@@ -382,7 +382,6 @@ export function Composer() {
 
   const handlePopOutComposer = useCallback(async () => {
     try {
-      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const state = useComposerStore.getState();
       const params = new URLSearchParams();
       params.set("compose", "true");
@@ -399,6 +398,17 @@ export function Composer() {
       const bodyHtml = editor?.getHTML() ?? "";
       if (bodyHtml) params.set("body", btoa(unescape(encodeURIComponent(bodyHtml))));
 
+      const url = `index.html?${params.toString()}`;
+
+      // Web: open a normal browser window — no Tauri window runtime.
+      if (isWeb()) {
+        window.open(url, "_blank", "noopener");
+        stopAutoSave();
+        closeComposer();
+        return;
+      }
+
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const windowLabel = `compose-${Date.now()}`;
       const existing = await WebviewWindow.getByLabel(windowLabel);
       if (existing) {
@@ -407,7 +417,7 @@ export function Composer() {
       }
 
       new WebviewWindow(windowLabel, {
-        url: `index.html?${params.toString()}`,
+        url,
         title: state.subject || "New Message",
         width: 700,
         height: 650,
