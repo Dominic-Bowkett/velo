@@ -22,19 +22,6 @@ pub async fn imap_list_folders(config: ImapConfig) -> Result<Vec<ImapFolder>, St
     let mut session = imap_client::connect(&config).await?;
     let folders = imap_client::list_folders(&mut session).await?;
     let _ = session.logout().await;
-    // Diagnostic: log what the server actually returns, so inbox-mapping issues
-    // (mail landing under "All Mail" instead of "Inbox") are visible in the
-    // server logs rather than only the browser console.
-    for f in &folders {
-        log::info!(
-            "IMAP folder for {}: path=\"{}\" raw=\"{}\" special_use=\"{}\" exists={}",
-            config.username,
-            f.path,
-            f.raw_path,
-            f.special_use.as_deref().unwrap_or(""),
-            f.exists
-        );
-    }
     Ok(folders)
 }
 

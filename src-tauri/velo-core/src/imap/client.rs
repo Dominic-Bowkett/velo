@@ -448,7 +448,6 @@ pub async fn move_messages(
     uid_set: &str,
     dest_folder: &str,
 ) -> Result<(), String> {
-    log::info!("IMAP MOVE: {source_folder} -> {dest_folder} uids={uid_set}");
     tokio::time::timeout(IMAP_CMD_TIMEOUT, session.select(source_folder))
         .await
         .map_err(|_| format!("SELECT {source_folder} timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
@@ -456,14 +455,8 @@ pub async fn move_messages(
 
     // Try MOVE extension first
     match tokio::time::timeout(IMAP_CMD_TIMEOUT, session.uid_mv(uid_set, dest_folder)).await {
-        Ok(Ok(())) => {
-            log::info!("IMAP MOVE via UID MOVE ok: {source_folder} -> {dest_folder}");
-            return Ok(());
-        }
-        other => {
-            log::info!(
-                "IMAP MOVE: UID MOVE unavailable/failed ({other:?}); falling back to COPY+DELETE for {source_folder} -> {dest_folder}"
-            );
+        Ok(Ok(())) => return Ok(()),
+        _ => {
             // Fallback: COPY, then mark Deleted, then EXPUNGE
             tokio::time::timeout(IMAP_CMD_TIMEOUT, session.uid_copy(uid_set, dest_folder))
                 .await

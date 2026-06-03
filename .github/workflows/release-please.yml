@@ -1,9 +1,13 @@
 name: Release Please
 
+# Disabled for the web-only (Railway) deployment: this cut versioned desktop
+# installers and required "Allow GitHub Actions to create pull requests", which
+# isn't enabled — so it failed on every push to main. Switched to manual-only
+# (workflow_dispatch) so it no longer runs automatically. To re-enable desktop
+# releases, restore the `push: branches: [main]` trigger and enable that repo
+# setting (Settings → Actions → General → Workflow permissions).
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
