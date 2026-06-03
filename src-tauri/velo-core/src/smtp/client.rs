@@ -61,44 +61,9 @@ async fn build_transport(
     };
 
     // Connect by IPv4 address when resolvable; fall back to the hostname.
-    let resolved_v4 = resolve_ipv4(&config.host, config.port).await;
-    let connect_host = resolved_v4
-        .clone()
+    let connect_host = resolve_ipv4(&config.host, config.port)
+        .await
         .unwrap_or_else(|| config.host.clone());
-
-    // Diagnostic: record what we're about to connect to. On hosts that block
-    // outbound SMTP (e.g. Railway) the connect itself fails with ENETUNREACH;
-    // this line proves the resolved address + port that was attempted.
-    log::info!(
-        "SMTP connecting host={} resolved_ipv4={:?} connect_to={} port={} security={}",
-        config.host,
-        resolved_v4,
-        connect_host,
-        config.port,
-        config.security
-    );
-
-    // Pre-flight: a bare TCP connect to the SMTP port. This isolates whether the
-    // failure is at the network layer (host blocks the port → ENETUNREACH /
-    // connection refused) versus TLS/auth. Purely diagnostic; non-fatal.
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::net::TcpStream::connect((connect_host.as_str(), config.port)),
-    )
-    .await
-    {
-        Ok(Ok(_)) => log::info!("SMTP pre-flight TCP connect to {connect_host}:{} OK", config.port),
-        Ok(Err(e)) => log::warn!(
-            "SMTP pre-flight TCP connect to {connect_host}:{} FAILED: {} (kind={:?})",
-            config.port,
-            e,
-            e.kind()
-        ),
-        Err(_) => log::warn!(
-            "SMTP pre-flight TCP connect to {connect_host}:{} TIMED OUT after 10s",
-            config.port
-        ),
-    }
 
     // Fail fast instead of hanging ~70s when a host silently drops SMTP packets.
     let connect_timeout = Some(std::time::Duration::from_secs(15));
