@@ -256,8 +256,9 @@ async function executeViaProvider(
   // IMAP that means "no messages to move/flag" — so the server change never
   // happens and the next sync restores the thread (e.g. "deleted mail comes
   // back"). Resolve the thread's message ids from the local DB when missing.
+  const isImap = provider.type === "imap";
   if (
-    provider.type === "imap" &&
+    isImap &&
     "messageIds" in action &&
     "threadId" in action &&
     (action.messageIds?.length ?? 0) === 0
@@ -272,11 +273,62 @@ async function executeViaProvider(
     }
   }
 
+  // For IMAP moves (trash/archive/spam/move), the messages physically leave
+  // their current folder on the server and get a NEW UID in the destination.
+  // The stale local rows (old folder/UID) must be deleted, otherwise the next
+  // sync re-threads them and the old label (e.g. INBOX) is re-derived — the
+  // "deleted mail comes back" bug. Capture the ids to purge after a successful
+  // server-side move.
+  const purgeAfter =
+    isImap &&
+    (action.type === "trash" ||
+      action.type === "archive" ||
+      action.type === "spam" ||
+      action.type === "moveToFolder") &&
+    "messageIds" in action
+      ? action.messageIds
+      : null;
+
+  const runPurge = async () => {
+    if (!purgeAfter || purgeAfter.length === 0) return;
+    const db = await getDb();
+    for (const id of purgeAfter) {
+      await db.execute(
+        "DELETE FROM messages WHERE account_id = $1 AND id = $2",
+        [accountId, id],
+      );
+    }
+  };
+
   switch (action.type) {
-    case "archive":
-      return provider.archive(action.threadId, action.messageIds);
-    case "trash":
-      return provider.trash(action.threadId, action.messageIds);
+    case "archive": {
+      const r = await provider.archive(action.threadId, action.messageIds);
+      await runPurge();
+      return r;
+    }
+    case "trash": {
+      const r = await provider.trash(action.threadId, action.messageIds);
+      await runPurge();
+      return r;
+    }
+    case "spam": {
+      const r = await provider.spam(
+        action.threadId,
+        action.messageIds,
+        action.isSpam,
+      );
+      await runPurge();
+      return r;
+    }
+    case "moveToFolder": {
+      const r = await provider.moveToFolder(
+        action.threadId,
+        action.messageIds,
+        action.folderPath,
+      );
+      await runPurge();
+      return r;
+    }
     case "permanentDelete":
       return provider.permanentDelete(action.threadId, action.messageIds);
     case "markRead":
@@ -290,18 +342,6 @@ async function executeViaProvider(
         action.threadId,
         action.messageIds,
         action.starred,
-      );
-    case "spam":
-      return provider.spam(
-        action.threadId,
-        action.messageIds,
-        action.isSpam,
-      );
-    case "moveToFolder":
-      return provider.moveToFolder(
-        action.threadId,
-        action.messageIds,
-        action.folderPath,
       );
     case "addLabel":
       return provider.addLabel(action.threadId, action.labelId);
