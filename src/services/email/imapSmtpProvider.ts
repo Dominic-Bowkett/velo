@@ -271,13 +271,46 @@ export class ImapSmtpProvider implements EmailProvider {
   ): Promise<void> {
     const config = await this.getImapConfig();
     const grouped = this.groupByFolder(_messageIds);
-    const archiveFolder =
-      (await findSpecialFolder(this.accountId, "\\Archive")) ?? "Archive";
+
+    // Resolve the Archive folder: the \Archive special-use first, then common
+    // Hostinger/cPanel layouts (INBOX.Archive / Archive / INBOX.Archives).
+    const archiveFolder = await this.resolveArchiveFolder(config);
+    if (!archiveFolder) {
+      throw new Error(
+        "No Archive folder found on the server. Create an 'Archive' folder in your mailbox to enable archiving.",
+      );
+    }
 
     for (const [folder, uids] of grouped) {
       if (folder === archiveFolder) continue;
       await imapMoveMessages(config, folder, uids, archiveFolder);
     }
+  }
+
+  /**
+   * Find the IMAP Archive folder path. Prefers the \Archive special-use label,
+   * then verifies a candidate actually exists on the server (servers vary:
+   * "INBOX.Archive", "Archive", "Archives"). Returns null if none exist.
+   */
+  private async resolveArchiveFolder(config: ImapConfig): Promise<string | null> {
+    const special = await findSpecialFolder(this.accountId, "\\Archive");
+    // Build an ordered candidate list, special-use first.
+    const candidates = [special, "INBOX.Archive", "Archive", "INBOX.Archives", "Archives"]
+      .filter((c): c is string => !!c);
+
+    let existing: Set<string>;
+    try {
+      const folders = await imapListFolders(config);
+      existing = new Set(folders.map((f) => f.raw_path));
+    } catch {
+      // If we can't list, fall back to the special-use value or first candidate.
+      return special ?? candidates[0] ?? null;
+    }
+
+    for (const c of candidates) {
+      if (existing.has(c)) return c;
+    }
+    return special; // may still be a valid (non-listed) path, or null
   }
 
   async trash(
