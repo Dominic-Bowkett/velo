@@ -250,6 +250,28 @@ async function executeViaProvider(
   action: EmailAction,
 ): Promise<unknown> {
   const provider = await getEmailProvider(accountId);
+
+  // IMAP actions operate on server-side message UIDs, but the UI often calls
+  // these with an empty messageIds array (it identifies threads by id). For
+  // IMAP that means "no messages to move/flag" — so the server change never
+  // happens and the next sync restores the thread (e.g. "deleted mail comes
+  // back"). Resolve the thread's message ids from the local DB when missing.
+  if (
+    provider.type === "imap" &&
+    "messageIds" in action &&
+    "threadId" in action &&
+    (action.messageIds?.length ?? 0) === 0
+  ) {
+    const db = await getDb();
+    const rows = await db.select<{ id: string }[]>(
+      "SELECT id FROM messages WHERE account_id = $1 AND thread_id = $2",
+      [accountId, action.threadId],
+    );
+    if (rows.length > 0) {
+      action = { ...action, messageIds: rows.map((r) => r.id) } as EmailAction;
+    }
+  }
+
   switch (action.type) {
     case "archive":
       return provider.archive(action.threadId, action.messageIds);

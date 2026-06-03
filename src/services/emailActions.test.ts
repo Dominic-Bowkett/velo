@@ -41,6 +41,7 @@ vi.mock("@/router/navigate", () => ({
 import { useUIStore } from "@/stores/uiStore";
 import { useThreadStore } from "@/stores/threadStore";
 import { getEmailProvider } from "@/services/email/providerFactory";
+import { getDb } from "@/services/db/connection";
 import { enqueuePendingOperation } from "@/services/db/pendingOperations";
 import {
   archiveThread,
@@ -289,6 +290,27 @@ describe("emailActions", () => {
       });
       expect(result.success).toBe(true);
       expect(mockProvider.createDraft).toHaveBeenCalledWith("base64data", undefined);
+    });
+
+    it("resolves IMAP message ids from the DB when trash is called with none", async () => {
+      // IMAP provider + empty messageIds: the action layer must look up the
+      // thread's message ids so the server-side move actually happens (otherwise
+      // the message stays on the server and re-appears on next sync).
+      const imapProvider = createMockEmailProvider({ type: "imap" });
+      vi.mocked(getEmailProvider).mockResolvedValue(imapProvider as never);
+      vi.mocked(getDb).mockResolvedValue({
+        execute: vi.fn(() => Promise.resolve()),
+        select: vi.fn(() =>
+          Promise.resolve([{ id: "imap-acct-1-INBOX-10" }, { id: "imap-acct-1-INBOX-11" }]),
+        ),
+      } as never);
+
+      const result = await trashThread("acct-1", "t1", []);
+      expect(result.success).toBe(true);
+      expect(imapProvider.trash).toHaveBeenCalledWith("t1", [
+        "imap-acct-1-INBOX-10",
+        "imap-acct-1-INBOX-11",
+      ]);
     });
   });
 });
