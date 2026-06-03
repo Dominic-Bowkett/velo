@@ -6,6 +6,7 @@ const getMessagesForThread = vi.fn();
 const trashThread = vi.fn();
 const getEmailProvider = vi.fn();
 const removeThread = vi.fn();
+const syncAccountNow = vi.fn(() => Promise.resolve());
 
 vi.mock("./db/messages", () => ({
   getMessagesForThread: (...args: unknown[]) => getMessagesForThread(...args),
@@ -13,6 +14,10 @@ vi.mock("./db/messages", () => ({
 
 vi.mock("./emailActions", () => ({
   trashThread: (...args: unknown[]) => trashThread(...args),
+}));
+
+vi.mock("./gmail/syncManager", () => ({
+  syncAccountNow: (...args: unknown[]) => syncAccountNow(...args),
 }));
 
 vi.mock("./email/providerFactory", () => ({
@@ -85,6 +90,8 @@ describe("moveThreadToAccount", () => {
       "imap-src-acct-INBOX-2",
     ]);
     expect(removeThread).toHaveBeenCalledWith("t1");
+    // Destination is synced immediately so the moved mail shows up at once.
+    expect(syncAccountNow).toHaveBeenCalledWith("dest-acct");
     expect(result).toEqual({ moved: 2 });
   });
 
