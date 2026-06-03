@@ -274,7 +274,12 @@ export class ImapSmtpProvider implements EmailProvider {
 
     // Resolve the Archive folder: the \Archive special-use first, then common
     // Hostinger/cPanel layouts (INBOX.Archive / Archive / INBOX.Archives).
-    const archiveFolder = await this.resolveArchiveFolder(config);
+    const archiveFolder = await this.resolveSpecialFolder(config, "\\Archive", [
+      "INBOX.Archive",
+      "Archive",
+      "INBOX.Archives",
+      "Archives",
+    ]);
     if (!archiveFolder) {
       throw new Error(
         "No Archive folder found on the server. Create an 'Archive' folder in your mailbox to enable archiving.",
@@ -288,15 +293,20 @@ export class ImapSmtpProvider implements EmailProvider {
   }
 
   /**
-   * Find the IMAP Archive folder path. Prefers the \Archive special-use label,
-   * then verifies a candidate actually exists on the server (servers vary:
-   * "INBOX.Archive", "Archive", "Archives"). Returns null if none exist.
+   * Resolve a special-use folder path (Trash/Junk/Archive…), verifying the
+   * candidate actually exists on the server. Servers vary in naming, e.g.
+   * Hostinger uses "INBOX.Trash"/"INBOX.Junk"/"INBOX.Archive". Prefers the
+   * special-use label, then the provided fallbacks. Returns null if none exist.
    */
-  private async resolveArchiveFolder(config: ImapConfig): Promise<string | null> {
-    const special = await findSpecialFolder(this.accountId, "\\Archive");
-    // Build an ordered candidate list, special-use first.
-    const candidates = [special, "INBOX.Archive", "Archive", "INBOX.Archives", "Archives"]
-      .filter((c): c is string => !!c);
+  private async resolveSpecialFolder(
+    config: ImapConfig,
+    specialUse: string,
+    fallbacks: string[],
+  ): Promise<string | null> {
+    const special = await findSpecialFolder(this.accountId, specialUse);
+    const candidates = [special, ...fallbacks].filter(
+      (c): c is string => !!c,
+    );
 
     let existing: Set<string>;
     try {
@@ -319,8 +329,17 @@ export class ImapSmtpProvider implements EmailProvider {
   ): Promise<void> {
     const config = await this.getImapConfig();
     const grouped = this.groupByFolder(_messageIds);
-    const trashFolder =
-      (await findSpecialFolder(this.accountId, "\\Trash")) ?? "Trash";
+    const trashFolder = await this.resolveSpecialFolder(config, "\\Trash", [
+      "INBOX.Trash",
+      "Trash",
+      "INBOX.Deleted Items",
+      "Deleted Items",
+    ]);
+    if (!trashFolder) {
+      throw new Error(
+        "No Trash folder found on the server. Create a 'Trash' folder in your mailbox to enable deleting.",
+      );
+    }
 
     for (const [folder, uids] of grouped) {
       if (folder === trashFolder) continue;
@@ -373,9 +392,23 @@ export class ImapSmtpProvider implements EmailProvider {
   ): Promise<void> {
     const config = await this.getImapConfig();
     const grouped = this.groupByFolder(_messageIds);
-    const junkFolder =
-      (await findSpecialFolder(this.accountId, "\\Junk")) ?? "Junk";
-    const destination = isSpam ? junkFolder : "INBOX";
+    let destination: string;
+    if (isSpam) {
+      const junkFolder = await this.resolveSpecialFolder(config, "\\Junk", [
+        "INBOX.Junk",
+        "Junk",
+        "INBOX.Spam",
+        "Spam",
+      ]);
+      if (!junkFolder) {
+        throw new Error(
+          "No Junk/Spam folder found on the server. Create a 'Junk' folder in your mailbox to enable spam.",
+        );
+      }
+      destination = junkFolder;
+    } else {
+      destination = "INBOX";
+    }
 
     for (const [folder, uids] of grouped) {
       if (folder === destination) continue;

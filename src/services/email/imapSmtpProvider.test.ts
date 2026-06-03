@@ -295,6 +295,36 @@ describe("ImapSmtpProvider", () => {
         "Deleted Items",
       );
     });
+
+    it("uses INBOX.Trash when that is the folder that exists (Hostinger layout)", async () => {
+      vi.mocked(findSpecialFolder).mockResolvedValue(null);
+      vi.mocked(imapListFolders).mockResolvedValue([
+        { path: "Trash", raw_path: "INBOX.Trash", name: "Trash", delimiter: ".", special_use: "\\Trash", exists: 0, unseen: 0 },
+      ] as never);
+      vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
+
+      await provider.trash("thread-1", ["imap-acc-1-INBOX-100"]);
+
+      expect(imapMoveMessages).toHaveBeenCalledWith(
+        mockImapConfig,
+        "INBOX",
+        [100],
+        "INBOX.Trash",
+      );
+    });
+
+    it("throws a clear error when no Trash folder exists", async () => {
+      vi.mocked(findSpecialFolder).mockResolvedValue(null);
+      vi.mocked(imapListFolders).mockResolvedValue([
+        { path: "INBOX", raw_path: "INBOX", name: "INBOX", delimiter: ".", special_use: "\\Inbox", exists: 0, unseen: 0 },
+      ] as never);
+      vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
+
+      await expect(
+        provider.trash("thread-1", ["imap-acc-1-INBOX-100"]),
+      ).rejects.toThrow(/No Trash folder/);
+      expect(imapMoveMessages).not.toHaveBeenCalled();
+    });
   });
 
   describe("permanentDelete", () => {
