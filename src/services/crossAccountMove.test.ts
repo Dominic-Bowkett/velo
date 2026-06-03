@@ -76,19 +76,10 @@ describe("moveThreadToAccount", () => {
 
     expect(src.fetchRawMessage).toHaveBeenCalledTimes(2);
     expect(dest.appendRawMessage).toHaveBeenCalledTimes(2);
-    // read message carries the \Seen flag, unread one does not
-    expect(dest.appendRawMessage).toHaveBeenNthCalledWith(
-      1,
-      "INBOX",
-      expect.any(String),
-      "(\\Seen)",
-    );
-    expect(dest.appendRawMessage).toHaveBeenNthCalledWith(
-      2,
-      "INBOX",
-      expect.any(String),
-      undefined,
-    );
+    // Reassigned mail always arrives UNREAD (no \Seen flag), even if it was
+    // already read in the source mailbox.
+    expect(dest.appendRawMessage).toHaveBeenNthCalledWith(1, "INBOX", expect.any(String));
+    expect(dest.appendRawMessage).toHaveBeenNthCalledWith(2, "INBOX", expect.any(String));
     expect(trashThread).toHaveBeenCalledWith("src-acct", "t1", [
       "imap-src-acct-INBOX-1",
       "imap-src-acct-INBOX-2",

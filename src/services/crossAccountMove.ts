@@ -72,11 +72,13 @@ export async function moveThreadToAccount(
   // 1. Fetch raw + append each message to the destination. If any append
   //    throws, we abort here and never delete from the source — at worst the
   //    destination gains a duplicate, but no message is lost.
+  //    The message is appended WITHOUT the \Seen flag so it arrives as UNREAD
+  //    in the new mailbox — a reassignment should flag it as new work for the
+  //    recipient, regardless of whether it was read in the source mailbox.
   for (const msg of messages) {
     const raw = await srcProvider.fetchRawMessage(msg.id);
     const rawBase64Url = base64UrlEncode(raw);
-    const flags = msg.is_read ? "(\\Seen)" : undefined;
-    await destProvider.appendRawMessage(destFolderPath, rawBase64Url, flags);
+    await destProvider.appendRawMessage(destFolderPath, rawBase64Url);
   }
 
   // 2. Every append succeeded — remove the thread from the source account.
