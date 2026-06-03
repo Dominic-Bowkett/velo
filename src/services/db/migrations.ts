@@ -164,7 +164,7 @@ const MIGRATIONS = [
         ('theme', 'system'),
         ('sidebar_collapsed', 'false'),
         ('reading_pane_position', 'right'),
-        ('sync_period_days', '365'),
+        ('sync_period_days', '30'),
         ('notifications_enabled', 'true'),
         ('undo_send_delay_seconds', '5'),
         ('default_font', 'system'),
@@ -935,8 +935,11 @@ export async function runMigrations(): Promise<void> {
   // (e.g. Hostinger) mislabelled inbox mail as "All Mail", leaving the Inbox
   // empty. Clearing folder sync state + IMAP messages/threads forces a full
   // re-fetch so messages get the correct INBOX label. Runs once.
+  // v3: re-run after the INBOX-mapping, blank-username, and email-uniqueness
+  // fixes are all in place, so every IMAP account re-syncs once with correct
+  // labels and a working login.
   const inboxRepairFlag = await db.select<{ value: string }[]>(
-    "SELECT value FROM settings WHERE key = 'imap_inbox_mapping_repair_v1'",
+    "SELECT value FROM settings WHERE key = 'imap_inbox_mapping_repair_v3'",
   );
   if (inboxRepairFlag.length === 0) {
     const imapAccounts = await db.select<{ id: string }[]>(
@@ -952,7 +955,22 @@ export async function runMigrations(): Promise<void> {
       await db.execute(`DELETE FROM folder_sync_state WHERE account_id IN ${imapFilter}`);
     }
     await db.execute(
-      "INSERT OR REPLACE INTO settings (key, value) VALUES ('imap_inbox_mapping_repair_v1', '1')",
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('imap_inbox_mapping_repair_v3', '1')",
+    );
+  }
+
+  // One-time: lower the default sync window from 365 to 30 days for faster
+  // first-run imports. Only updates the value if it's still the old default,
+  // so a deliberate user choice is preserved. Runs once.
+  const syncDaysRepair = await db.select<{ value: string }[]>(
+    "SELECT value FROM settings WHERE key = 'sync_days_default_30_v1'",
+  );
+  if (syncDaysRepair.length === 0) {
+    await db.execute(
+      "UPDATE settings SET value = '30' WHERE key = 'sync_period_days' AND value = '365'",
+    );
+    await db.execute(
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('sync_days_default_30_v1', '1')",
     );
   }
 }
