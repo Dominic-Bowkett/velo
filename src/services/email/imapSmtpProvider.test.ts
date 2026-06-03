@@ -214,8 +214,14 @@ describe("ImapSmtpProvider", () => {
   // ---------- Actions ----------
 
   describe("archive", () => {
+    // archive() now verifies the resolved folder exists via imapListFolders.
+    const archiveFolderList = [
+      { path: "Archive", raw_path: "Archive", name: "Archive", delimiter: "/", special_use: "\\Archive", exists: 0, unseen: 0 },
+    ];
+
     it("moves messages to Archive folder", async () => {
       vi.mocked(findSpecialFolder).mockResolvedValue("Archive");
+      vi.mocked(imapListFolders).mockResolvedValue(archiveFolderList as never);
       vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
 
       await provider.archive("thread-1", [
@@ -234,6 +240,7 @@ describe("ImapSmtpProvider", () => {
 
     it("skips messages already in Archive", async () => {
       vi.mocked(findSpecialFolder).mockResolvedValue("Archive");
+      vi.mocked(imapListFolders).mockResolvedValue(archiveFolderList as never);
       vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
 
       await provider.archive("thread-1", ["imap-acc-1-Archive-100"]);
@@ -241,8 +248,12 @@ describe("ImapSmtpProvider", () => {
       expect(imapMoveMessages).not.toHaveBeenCalled();
     });
 
-    it("falls back to 'Archive' when special folder not found", async () => {
+    it("uses INBOX.Archive when that is the folder that exists (Hostinger layout)", async () => {
+      // No \Archive special-use; the real folder is INBOX.Archive.
       vi.mocked(findSpecialFolder).mockResolvedValue(null);
+      vi.mocked(imapListFolders).mockResolvedValue([
+        { path: "Archive", raw_path: "INBOX.Archive", name: "Archive", delimiter: ".", special_use: null, exists: 0, unseen: 0 },
+      ] as never);
       vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
 
       await provider.archive("thread-1", ["imap-acc-1-INBOX-100"]);
@@ -251,8 +262,21 @@ describe("ImapSmtpProvider", () => {
         mockImapConfig,
         "INBOX",
         [100],
-        "Archive",
+        "INBOX.Archive",
       );
+    });
+
+    it("throws a clear error when no Archive folder exists", async () => {
+      vi.mocked(findSpecialFolder).mockResolvedValue(null);
+      vi.mocked(imapListFolders).mockResolvedValue([
+        { path: "INBOX", raw_path: "INBOX", name: "INBOX", delimiter: ".", special_use: "\\Inbox", exists: 0, unseen: 0 },
+      ] as never);
+      vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
+
+      await expect(
+        provider.archive("thread-1", ["imap-acc-1-INBOX-100"]),
+      ).rejects.toThrow(/No Archive folder/);
+      expect(imapMoveMessages).not.toHaveBeenCalled();
     });
   });
 
