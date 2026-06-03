@@ -292,14 +292,16 @@ describe("emailActions", () => {
       expect(mockProvider.createDraft).toHaveBeenCalledWith("base64data", undefined);
     });
 
-    it("resolves IMAP message ids from the DB when trash is called with none", async () => {
+    it("resolves IMAP message ids from the DB and purges local rows on trash", async () => {
       // IMAP provider + empty messageIds: the action layer must look up the
-      // thread's message ids so the server-side move actually happens (otherwise
-      // the message stays on the server and re-appears on next sync).
+      // thread's message ids (so the server-side move happens) AND delete the
+      // stale local rows (so the next sync can't re-thread them and resurrect
+      // the INBOX label — the "deleted mail comes back" bug).
       const imapProvider = createMockEmailProvider({ type: "imap" });
       vi.mocked(getEmailProvider).mockResolvedValue(imapProvider as never);
+      const execute = vi.fn(() => Promise.resolve());
       vi.mocked(getDb).mockResolvedValue({
-        execute: vi.fn(() => Promise.resolve()),
+        execute,
         select: vi.fn(() =>
           Promise.resolve([{ id: "imap-acct-1-INBOX-10" }, { id: "imap-acct-1-INBOX-11" }]),
         ),
@@ -311,6 +313,12 @@ describe("emailActions", () => {
         "imap-acct-1-INBOX-10",
         "imap-acct-1-INBOX-11",
       ]);
+      // Local message rows for those ids are deleted after the server move.
+      const deletedIds = execute.mock.calls
+        .filter((c) => String(c[0]).startsWith("DELETE FROM messages"))
+        .map((c) => (c[1] as unknown[])[1]);
+      expect(deletedIds).toContain("imap-acct-1-INBOX-10");
+      expect(deletedIds).toContain("imap-acct-1-INBOX-11");
     });
   });
 });
