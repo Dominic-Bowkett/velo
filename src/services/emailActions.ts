@@ -273,42 +273,48 @@ async function executeViaProvider(
     }
   }
 
-  // For IMAP moves (trash/archive/spam/move), the messages physically leave
-  // their current folder on the server and get a NEW UID in the destination.
-  // The stale local rows (old folder/UID) must be deleted, otherwise the next
-  // sync re-threads them and the old label (e.g. INBOX) is re-derived — the
-  // "deleted mail comes back" bug. Capture the ids to purge after a successful
-  // server-side move.
-  const purgeAfter =
+  // For IMAP moves (trash/archive/spam/move) the message leaves its folder on
+  // the server and the local copy must go too, otherwise the next sync re-threads
+  // it and the old label (e.g. INBOX) is re-derived. We remove the whole THREAD
+  // locally (not just the message row) so sync can't leave a half-stitched
+  // duplicate; sync then rebuilds it cleanly under its new folder/label.
+  const removeThreadAfter =
     isImap &&
     (action.type === "trash" ||
       action.type === "archive" ||
       action.type === "spam" ||
       action.type === "moveToFolder") &&
-    "messageIds" in action
-      ? action.messageIds
+    "threadId" in action
+      ? action.threadId
       : null;
 
-  const runPurge = async () => {
-    if (!purgeAfter || purgeAfter.length === 0) return;
+  const runCleanup = async () => {
+    if (!removeThreadAfter) return;
     const db = await getDb();
-    for (const id of purgeAfter) {
-      await db.execute(
-        "DELETE FROM messages WHERE account_id = $1 AND id = $2",
-        [accountId, id],
-      );
-    }
+    await db.execute(
+      "DELETE FROM messages WHERE account_id = $1 AND thread_id = $2",
+      [accountId, removeThreadAfter],
+    );
+    await db.execute(
+      "DELETE FROM thread_labels WHERE account_id = $1 AND thread_id = $2",
+      [accountId, removeThreadAfter],
+    );
+    await db.execute(
+      "DELETE FROM threads WHERE account_id = $1 AND id = $2",
+      [accountId, removeThreadAfter],
+    );
+    useThreadStore.getState().removeThread(removeThreadAfter);
   };
 
   switch (action.type) {
     case "archive": {
       const r = await provider.archive(action.threadId, action.messageIds);
-      await runPurge();
+      await runCleanup();
       return r;
     }
     case "trash": {
       const r = await provider.trash(action.threadId, action.messageIds);
-      await runPurge();
+      await runCleanup();
       return r;
     }
     case "spam": {
@@ -317,7 +323,7 @@ async function executeViaProvider(
         action.messageIds,
         action.isSpam,
       );
-      await runPurge();
+      await runCleanup();
       return r;
     }
     case "moveToFolder": {
@@ -326,7 +332,7 @@ async function executeViaProvider(
         action.messageIds,
         action.folderPath,
       );
-      await runPurge();
+      await runCleanup();
       return r;
     }
     case "permanentDelete":
