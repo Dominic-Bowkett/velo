@@ -323,5 +323,27 @@ describe("emailActions", () => {
         "DELETE FROM threads WHERE account_id = $1 AND id = $2",
       );
     });
+
+    it("still cleans up locally when the server says the message is gone", async () => {
+      // Stale local items (e.g. stuck in All Mail) whose UID no longer exists on
+      // the server must still delete locally instead of failing forever.
+      const imapProvider = createMockEmailProvider({
+        type: "imap",
+        trash: vi.fn(() => Promise.reject(new Error("Message UID 2087 not found in INBOX"))),
+      });
+      vi.mocked(getEmailProvider).mockResolvedValue(imapProvider as never);
+      const execute = vi.fn(() => Promise.resolve());
+      vi.mocked(getDb).mockResolvedValue({
+        execute,
+        select: vi.fn(() => Promise.resolve([{ id: "imap-acct-1-INBOX-2087" }])),
+      } as never);
+
+      const result = await trashThread("acct-1", "t1", []);
+      expect(result.success).toBe(true);
+      const stmts = execute.mock.calls.map((c) => String(c[0]));
+      expect(stmts).toContain(
+        "DELETE FROM threads WHERE account_id = $1 AND id = $2",
+      );
+    });
   });
 });
