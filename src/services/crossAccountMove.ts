@@ -21,6 +21,7 @@
 import { getEmailProvider } from "./email/providerFactory";
 import { getMessagesForThread } from "./db/messages";
 import { trashThread } from "./emailActions";
+import { syncAccountNow } from "./gmail/syncManager";
 import { useThreadStore } from "@/stores/threadStore";
 
 /**
@@ -88,8 +89,15 @@ export async function moveThreadToAccount(
     messages.map((m) => m.id),
   );
 
-  // 3. Reflect locally and trigger a sync so the destination picks it up.
+  // 3. Reflect locally and sync the DESTINATION account right away (bypassing
+  //    the background queue) so the moved message appears in the new mailbox
+  //    immediately rather than on its next ~30s cycle.
   useThreadStore.getState().removeThread(threadId);
+  try {
+    await syncAccountNow(destAccountId);
+  } catch (err) {
+    console.warn(`Immediate destination sync failed for ${destAccountId}:`, err);
+  }
   window.dispatchEvent(new Event("velo-sync-done"));
 
   return { moved: messages.length };
