@@ -306,35 +306,51 @@ async function executeViaProvider(
     useThreadStore.getState().removeThread(removeThreadAfter);
   };
 
+  /**
+   * Run an IMAP move/trash/archive then clean up locally. If the server reports
+   * the message/UID/folder is gone (a stale local copy left over from earlier
+   * syncs — e.g. items stuck in All Mail that "won't delete"), treat it as
+   * already-removed and still clean up locally so the action succeeds instead
+   * of failing forever.
+   */
+  const runMove = async (op: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      const r = await op();
+      await runCleanup();
+      return r;
+    } catch (err) {
+      const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+      const alreadyGone =
+        msg.includes("not found") ||
+        msg.includes("does not exist") ||
+        msg.includes("no matching") ||
+        msg.includes("unknown mailbox") ||
+        msg.includes("nonexistent");
+      if (alreadyGone) {
+        console.warn(
+          `[emailActions] ${action.type}: message no longer on server, cleaning up locally:`,
+          msg,
+        );
+        await runCleanup();
+        return undefined;
+      }
+      throw err;
+    }
+  };
+
   switch (action.type) {
-    case "archive": {
-      const r = await provider.archive(action.threadId, action.messageIds);
-      await runCleanup();
-      return r;
-    }
-    case "trash": {
-      const r = await provider.trash(action.threadId, action.messageIds);
-      await runCleanup();
-      return r;
-    }
-    case "spam": {
-      const r = await provider.spam(
-        action.threadId,
-        action.messageIds,
-        action.isSpam,
+    case "archive":
+      return runMove(() => provider.archive(action.threadId, action.messageIds));
+    case "trash":
+      return runMove(() => provider.trash(action.threadId, action.messageIds));
+    case "spam":
+      return runMove(() =>
+        provider.spam(action.threadId, action.messageIds, action.isSpam),
       );
-      await runCleanup();
-      return r;
-    }
-    case "moveToFolder": {
-      const r = await provider.moveToFolder(
-        action.threadId,
-        action.messageIds,
-        action.folderPath,
+    case "moveToFolder":
+      return runMove(() =>
+        provider.moveToFolder(action.threadId, action.messageIds, action.folderPath),
       );
-      await runCleanup();
-      return r;
-    }
     case "permanentDelete":
       return provider.permanentDelete(action.threadId, action.messageIds);
     case "markRead":
