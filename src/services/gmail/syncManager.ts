@@ -11,7 +11,7 @@ import { hasCalendarSupport, getCalendarProvider } from "../calendar/providerFac
 import { getVisibleCalendars, upsertCalendar, updateCalendarSyncToken } from "../db/calendars";
 import { upsertCalendarEvent, deleteEventByRemoteId } from "../db/calendarEvents";
 
-const SYNC_INTERVAL_MS = 60_000; // 60 seconds — delta syncs are lightweight (single API call when idle)
+const SYNC_INTERVAL_MS = 30_000; // 30 seconds — delta syncs are lightweight; balances "new mail shows quickly" against IMAP-server throttling
 
 /** Map IMAP sync phases to the SyncProgress phases the UI understands. */
 function mapImapPhase(phase: string): "labels" | "threads" | "messages" | "done" {
